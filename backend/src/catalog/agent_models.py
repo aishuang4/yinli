@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
 from src.agents.runtime_types import MAX_REACT_ITERS
 from src.agents.system_agents import is_system_agent_id
@@ -29,18 +29,10 @@ class Guardrails(BaseModel):
     filesystem_scope: str = Field(default="", description="文件系统访问范围；空表示默认 Project 根")
     shell_blacklist: list[str] = Field(default_factory=lambda: ["rm -rf /", "sudo"], description="Shell 命令黑名单")
     network_enabled: bool = Field(default=True, description="是否允许网络访问")
-    human_approval: bool = Field(default=False, exclude=True, description="旧人工审批开关，只用于迁移")
-    tool_permission_mode: str = Field(
-        default="accept_edits",
-        alias="toolPermissionMode",
-        exclude=True,
-        description="旧工具权限模式，只用于迁移",
-    )
-    tool_permission_profile: str = Field(
-        default="confirm_destructive",
-        alias="toolPermissionProfile",
-        exclude=True,
-        description="旧工具权限配置，只用于迁移",
+    operation_scope: str = Field(
+        default="normal",
+        alias="operationScope",
+        description="能力范围：normal 或 read_only。不决定工具要不要审批。",
     )
     execution_backend: str = Field(
         default="local",
@@ -59,14 +51,29 @@ class Guardrails(BaseModel):
     )
     timeout_seconds: int = Field(default=300, gt=0, description="工具调用超时（秒）")
 
-    model_config = {"populate_by_name": True}
+    model_config = {"populate_by_name": True, "extra": "ignore"}
 
-    @computed_field(alias="operationScope")
-    @property
-    def operation_scope(self) -> str:
-        """只讀配置對外是 operationScope；舊模式字段不再出現在導出裡。"""
+    @model_validator(mode="before")
+    @classmethod
+    def _lift_legacy_read_only(cls, data: object) -> object:
+        """旧工具权限档里的 read_only 收成能力范围，审批档丢弃。"""
 
-        return "read_only" if self.tool_permission_profile == "read_only" else "normal"
+        if not isinstance(data, dict):
+            return data
+        payload = dict(data)
+        profile = payload.get("tool_permission_profile", payload.get("toolPermissionProfile"))
+        if (
+            str(profile or "") == "read_only"
+            and not payload.get("operation_scope")
+            and not payload.get("operationScope")
+        ):
+            payload["operation_scope"] = "read_only"
+        return payload
+
+    @field_validator("operation_scope", mode="before")
+    @classmethod
+    def _normalize_operation_scope(cls, value: object) -> str:
+        return "read_only" if str(value or "") == "read_only" else "normal"
 
 
 class PlanConfig(BaseModel):
@@ -100,7 +107,6 @@ class AgentResponse(BaseModel):
     status: str = "idle"
     created_at: str
     updated_at: str
-    workspace_id: str = Field(default="default", alias="workspaceId")
     role: str = Field(default="chat")
     job_toolkit: JobToolkit = Field(default_factory=JobToolkit, alias="jobToolkit")
     source_path: str = Field(default="", alias="sourcePath")
@@ -113,7 +119,7 @@ class AgentResponse(BaseModel):
 
         return is_system_agent_id(self.id)
 
-    model_config = {"populate_by_name": True}
+    model_config = {"populate_by_name": True, "extra": "ignore"}
 
 
 class AgentExportPackage(BaseModel):

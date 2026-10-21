@@ -19,6 +19,7 @@ from src.server.routes.chat.skill_context_middleware import (
     activated_skills,
     ensure_activated_skills_in_context,
     missing_activated_skills,
+    preload_scheduled_skills,
     restore_activated_skills,
 )
 
@@ -45,6 +46,28 @@ def _run_acting(agent: _FakeAgent, tool_call: ToolCallBlock, handler=_viewer_han
         return [item async for item in SkillContextMiddleware().on_acting(agent, {"tool_call": tool_call}, handler)]
 
     return asyncio.run(run())
+
+
+def test_scheduled_preload_uses_skill_name_and_full_body() -> None:
+    agent = _FakeAgent()
+    body = "先跑脚本\n" + ("步骤。" * 2000)
+    skill = SimpleNamespace(
+        id="external-abc",
+        name="证书核对",
+        content=body,
+        resource_path="",
+    )
+
+    assert preload_scheduled_skills(agent, [skill]) == ["证书核对"]
+    corpus = " ".join(
+        str(getattr(block, "hint", "") or getattr(block, "text", "") or "")
+        for msg in agent.state.context
+        for block in (msg.content or [])
+    )
+    assert '<activated-skill name="证书核对">' in corpus
+    assert "external-abc" not in corpus
+    assert body in corpus
+    assert "call the Skill tool" not in corpus
 
 
 def test_on_acting_records_skill_viewer_output() -> None:

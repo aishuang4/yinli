@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import yaml
@@ -39,6 +39,7 @@ class DiscoveredSkill:
     source_scope: str = "project"
     source_path: str = ""
     content_hash: str = ""
+    shadowed_by: str = ""
 
 
 def read_package_markdown(resource_path: str | Path) -> str:
@@ -64,6 +65,15 @@ def _split_frontmatter(markdown: str) -> tuple[dict, str]:
     if not isinstance(payload, dict):
         return {}, markdown
     return payload, match.group("body")
+
+
+def frontmatter_identity(markdown: str, fallback: str) -> tuple[str, str]:
+    """注入用的是 SKILL.md 的 name，不是包 id。"""
+
+    metadata, _body = _split_frontmatter(markdown)
+    name = str(metadata.get("name") or fallback).strip() or fallback
+    description = str(metadata.get("description") or "").strip() or name
+    return name, description
 
 
 def _package_resources(package_dir: Path) -> list[str]:
@@ -94,8 +104,8 @@ def _discovered_from_package(
     description = str(metadata.get("description") or "").strip()
     if not name or not description:
         return None
-    content_hash = hashlib.sha256(markdown.encode("utf-8")).hexdigest()[:16]
-    skill_id = stable_id or f"external-{content_hash}"
+    content_hash = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
+    skill_id = stable_id or f"external-{content_hash[:16]}"
     return DiscoveredSkill(
         id=skill_id,
         name=name,
@@ -116,53 +126,25 @@ def discover_skill_packages(
     project_root: Path,
     *,
     user_data_root: Path,
-    user_home_root: Path | None,
-    workspace_id: str = "default",
+    user_home_root: Path | None = None,
+    **_extra: object,
 ) -> list[DiscoveredSkill]:
-    """只扫描 runtime skills 与 .agents/.agent/.claude/skills。主目录和未登记位置不加载。"""
+    """只扫描 runtime skills 与 .agents/.agent/.claude/skills。顺序是 runtime → user → project。"""
 
-    del user_home_root, workspace_id
-    roots: list[tuple[Path, str, bool, str]] = [
+    del user_home_root, _extra
+    targets: list[tuple[Path, str, bool, str]] = [
         (skill_packages_root(), "runtime", True, "runtime"),
     ]
     bases: list[tuple[Path, str, bool, str]] = [
-        (project_root, "project", True, "external_agents"),
         (user_data_root, "user", False, "external_agents"),
+        (project_root, "project", True, "external_agents"),
     ]
     for base, scope, enabled, kind in bases:
         for directory_name in SKILL_SCAN_DIR_NAMES:
-            roots.append((Path(base) / directory_name, scope, enabled, kind))
+            targets.append((Path(base) / directory_name, scope, enabled, kind))
     for extra in _extra_skill_roots:
-        roots.append((Path(extra), "extra", True, "extension"))
-
-    discovered: list[DiscoveredSkill] = []
-    seen: set[str] = set()
-    for root, scope, enabled, source_kind in roots:
-        try:
-            resolved = root.resolve()
-        except OSError:
-            continue
-        if not resolved.is_dir():
-            continue
-        for skill_md in sorted(resolved.glob("*/SKILL.md")):
-            package_dir = skill_md.parent.absolute()
-            try:
-                if not package_dir.is_relative_to(resolved):
-                    continue
-            except ValueError:
-                continue
-            item = _discovered_from_package(
-                package_dir,
-                enabled=enabled,
-                source_kind=source_kind,
-                source_scope=scope,
-                stable_id=package_dir.name,
-            )
-            if item is None or item.id in seen:
-                continue
-            seen.add(item.id)
-            discovered.append(item)
-    return discovered
+        targets.append((Path(extra), "extra", True, "extension"))
+    return scan_skill_directories(targets)
 
 
 def list_system_skill_packages() -> list[DiscoveredSkill]:
@@ -243,9 +225,10 @@ def skill_scan_targets(
 def scan_skill_directories(
     targets: list[tuple[Path, str, bool, str]],
 ) -> list[DiscoveredSkill]:
-    """扫描给定根目录下一层的 SKILL.md。同名目录后出现的覆盖先出现的。"""
+    """扫描给定根目录下一层的 SKILL.md。后出现的同名包遮蔽先出现的，被遮蔽项带 shadowed_by。"""
 
-    discovered: dict[str, DiscoveredSkill] = {}
+    grouped: dict[str, list[DiscoveredSkill]] = {}
+    order: list[str] = []
     for root, scope, enabled, source_kind in targets:
         try:
             resolved = Path(root).resolve()
@@ -267,6 +250,18 @@ def scan_skill_directories(
                 source_scope=scope,
                 stable_id=package_dir.name,
             )
-            if item is not None:
-                discovered[item.id] = item
-    return list(discovered.values())
+            if item is None:
+                continue
+            if item.id not in grouped:
+                order.append(item.id)
+                grouped[item.id] = []
+            grouped[item.id].append(item)
+    result: list[DiscoveredSkill] = []
+    for skill_id in order:
+        items = grouped[skill_id]
+        winner = items[-1]
+        winner_ref = winner.source_path or winner.resource_path
+        for item in items[:-1]:
+            result.append(replace(item, shadowed_by=winner_ref))
+        result.append(winner)
+    return result

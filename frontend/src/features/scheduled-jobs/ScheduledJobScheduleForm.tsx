@@ -66,7 +66,7 @@ export function ScheduledJobScheduleForm({
 
   if (job.scheduleKind !== 'weekly') {
     return (
-      <FormSection title="调度" description="Phase 1 仅支持在此修改 weekly 调度；单次任务保持只读。">
+      <FormSection title="调度" description="单次时间请用右上角「编辑」修改。">
         <div className="text-sm text-[var(--color-text-secondary)]">
           单次执行时间：{readClock(job) || '未设置'}（{job.timezone}）
         </div>

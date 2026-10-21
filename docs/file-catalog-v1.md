@@ -34,7 +34,7 @@
 
 `role` 只允许 `chat` 或 `job`。模型、采样和供应商不写进 profile，模型在 `models.json`（桌面）或平台目录（托管 Web）。`planConfig` 不写。`workspaceId` 由目录决定。
 
-`role=job` 时必须有 `job_toolkit.required` / `optional`。加载后强制 `human_approval=false`、`tool_permission_profile=trusted_tools`。系统 `default` 不能改成 Job Agent。`system-websearch-job` 不可删除，也不可改成 Chat Agent。
+`role=job` 时必须有 `job_toolkit.required` / `optional`。Agent 档案不再保存工具审批档。系统 `default` 不能改成 Job Agent。`system-websearch-job` 不可删除，也不可改成 Chat Agent。
 
 `filesystem_scope` 空字符串表示运行时用 Project root。文件里禁止写 `/`；写了按空字符串处理。
 

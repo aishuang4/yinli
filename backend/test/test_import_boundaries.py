@@ -14,7 +14,7 @@ CHAT_PREFIX = "src.server.routes.chat"
 SEALED_ROOTS = ("group_studio/", "scheduler/")
 PUBLIC_ENTRY = (
     "src.runtime.agent_spec、src.runtime.governance、src.runtime.chat_session、"
-    "src.runtime.agent_resources、src.runtime.scheduled_chat"
+    "src.runtime.agent_resources、src.runtime.scheduled_chat、src.runtime.capabilities"
 )
 
 # 文件相对 backend/src，模块，导入名。群聊和定时任务不在这里。
@@ -87,6 +87,7 @@ PUBLIC_RUNTIME_MODULES = {
     "src.runtime.chat_session",
     "src.runtime.governance",
     "src.runtime.scheduled_chat",
+    "src.runtime.capabilities",
 }
 
 

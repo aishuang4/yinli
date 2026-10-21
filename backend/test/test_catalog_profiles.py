@@ -7,8 +7,8 @@ from src.catalog.profiles import dump_profile_markdown, parse_profile_markdown, 
 from src.catalog.system_defaults import build_default_agent
 
 
-def _parse(text: str, path: Path, workspace_id: str = "default"):
-    return parse_profile_markdown(text, path=path, workspace_id=workspace_id)
+def _parse(text: str, path: Path):
+    return parse_profile_markdown(text, path=path)
 
 
 def test_uuid_and_short_id_round_trip(tmp_path: Path) -> None:
@@ -29,13 +29,13 @@ def test_uuid_and_short_id_round_trip(tmp_path: Path) -> None:
             "status": "idle",
             "created_at": "2026-09-10T00:00:00+00:00",
             "updated_at": "2026-09-10T00:00:00+00:00",
-            "workspaceId": "ws-a",
+            
             "role": "chat",
             "jobToolkit": {},
         })
         path = tmp_path / f"{agent_id}.md"
         written = write_profile_file(path, agent)
-        parsed = _parse(path.read_text(encoding="utf-8"), path, "ws-a")
+        parsed = _parse(path.read_text(encoding="utf-8"), path)
         assert parsed.agent is not None
         assert parsed.agent.id == agent_id
         assert parsed.agent.system_prompt == "你是助手。"
@@ -60,7 +60,7 @@ def test_filename_mismatch_is_error(tmp_path: Path) -> None:
         "guardrails": {},
         "created_at": "2026-09-10T00:00:00+00:00",
         "updated_at": "2026-09-10T00:00:00+00:00",
-        "workspaceId": "default",
+        
         "role": "chat",
         "jobToolkit": {},
     }))

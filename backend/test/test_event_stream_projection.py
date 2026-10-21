@@ -346,6 +346,32 @@ def test_stream_service_replays_contiguous_tail_or_falls_back_to_snapshot(projec
     assert service.heartbeat_comment() == ": heartbeat\n\n"
 
 
+def test_tool_call_end_replaces_blank_streamed_arguments(projection_db) -> None:
+    events, store, coordinator, runner = create_runtime()
+    normalizer = ChatProjectionNormalizer(
+        stream_key="stream-tool-args",
+        run_id="run-tool-args",
+        session_id="session-tool-args",
+        events=events,
+    )
+    normalizer.start(agent_name="Agent")
+    normalizer.ingest("TOOL_CALL_START", {"tool_call_id": "call-1", "tool_call_name": "Bash"})
+    normalizer.ingest("TOOL_CALL_DELTA", {"tool_call_id": "call-1", "delta": ""})
+    normalizer.ingest("TOOL_CALL_DELTA", {"tool_call_id": "call-1", "delta": '{"command":'})
+    normalizer.ingest("TOOL_CALL_END", {
+        "tool_call_id": "call-1",
+        "input": '{"command": "python3 scripts/check_cert.py --as-of 2026-10-21"}',
+    })
+    normalizer.ingest("TOOL_RESULT_END", {"tool_call_id": "call-1", "state": "completed"})
+    normalizer.ingest("RUN_COMPLETED", {"payload": {}})
+
+    assert runner.run_available("stream-tool-args", "run-tool-args") == len(events.list("stream-tool-args"))
+    state = store.load_materialized("stream-tool-args", coordinator)
+    assert state.snapshot.blocks_by_id["tool:call-1"].data["inputPreview"] == (
+        '{"command": "python3 scripts/check_cert.py --as-of 2026-10-21"}'
+    )
+
+
 def test_source_normalizer_closes_all_activity_before_run_completed(projection_db) -> None:
     events, store, coordinator, runner = create_runtime(checkpoint_frame_interval=8)
     normalizer = ChatProjectionNormalizer(
@@ -503,7 +529,7 @@ def test_real_team_outbox_projects_incremental_block_tree(projection_db, tmp_pat
         goal="并行审计",
         leader_agent_id="agent-leader",
         leader_name="Leader",
-        project_id="project-team",
+        project_slug="project-team",
         root=tmp_path / "team-runtime",
     )
     member = team_store.spawn_member(name="Reviewer", role="review", runtime_prompt="review")
@@ -639,7 +665,7 @@ def test_real_team_outbox_projects_incremental_block_tree(projection_db, tmp_pat
     mail_blocks = [block for block in snapshot.blocks_by_id.values() if block.kind == "team-mail"]
 
     assert snapshot.stream_done is True
-    assert team_block.data["projectId"] == "project-team"
+    assert team_block.data["projectSlug"] == "project-team"
     assert team_block.data["counts"]["succeeded"] == 1
     assert team_block.outcome == "completed"
     assert member_block.data["name"] == "Reviewer"
@@ -734,7 +760,7 @@ def test_team_task_retry_reopens_projection_and_keeps_retry_output(projection_db
         goal="重派可见",
         leader_agent_id="agent-leader",
         leader_name="Leader",
-        project_id="project-team",
+        project_slug="project-team",
         root=tmp_path / "team-runtime-retry",
     )
     member = team_store.spawn_member(name="Writer", role="write", runtime_prompt="write")

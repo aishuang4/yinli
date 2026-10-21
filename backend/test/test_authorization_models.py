@@ -10,7 +10,7 @@ def make_action(**updates):
     """使用全虚构归属与输入构造动作。"""
 
     return ActionSnapshot(
-        authorization=RunAuthorization(tenantId="local", workspaceId="w", projectId="p",
+        authorization=RunAuthorization(tenantId="local", projectSlug="p",
                                        sessionId="s", runId="r", actorId="a", capabilityVersion="v1"),
         callId="c", toolName="Fake", toolVersion="1", normalizedInputJson='{"b":2,"a":1}',
         **updates,

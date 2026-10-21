@@ -17,16 +17,14 @@ from src.agents.runtime_types import MAX_REACT_ITERS
 from src.server.routes.chat.hitl import build_automatic_confirm_resume
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.run_context import ChatRunContext
-from src.server.routes.chat.prompts import _build_file_attachments_user_note
+from src.server.routes.chat.prompts import compose_turn_user_text
 from src.server.routes.chat.runtime import _build_user_content, _guardrail_cache_key
 from src.server.routes.chat.runtime_events import (
     agentscope_reply_error_message,
     agentscope_reply_finished_reason,
 )
 from src.server.routes.chat.runtime_builder import build_main_agent_runtime_spec, create_main_agent_from_spec
-from src.server.routes.chat.skill_context_middleware import activate_forced_skills
 from src.server.routes.chat.runtime_governance import (
-    append_user_note,
     build_context_governance_middlewares,
     build_actor_memory_prompt,
     observe_model_call_event,
@@ -103,11 +101,7 @@ async def run_leader_coordination(
             user_msg=UserMsg(
                 name="user",
                 content=_build_user_content(
-                    append_user_note(
-                        f"为本轮目标组建团队并创建共享任务：\n{run_data.message}",
-                        # 含本轮 <attached_files> 路径 + 记忆召回，和单 Agent 同一段 user_message_note。
-                        str(getattr(ctx, "user_message_note", "") or ctx.memory_recall_text),
-                    ),
+                    _leader_user_text(ctx, run_data),
                     run_data.images,
                 ),
             ),
@@ -193,10 +187,7 @@ async def run_member_task(
         user_msg=UserMsg(
             name="user",
             content=_build_user_content(
-                append_user_note(
-                    _member_user_prompt(store, member_id, task),
-                    _build_file_attachments_user_note(getattr(run_data, "files", None) or []),
-                ),
+                _member_turn_text(ctx, store, member_id, task, run_data),
                 run_data.images,
             ),
         ),
@@ -410,16 +401,6 @@ def _create_team_agent(
         session_id=session_id,
         prompt_sections={"team": max(0, len(system_prompt) - memory_chars), "memory": memory_chars},
     )
-    if skill_context:
-        used_ids = {str(getattr(skill, "id", "") or "") for skill in used_skills}
-        activate_forced_skills(
-            agent,
-            [
-                skill
-                for skill in list(getattr(ctx, "forced_skills", None) or [])
-                if str(getattr(skill, "id", "") or "") in used_ids
-            ],
-        )
     return agent
 
 
@@ -768,6 +749,32 @@ def _member_system_prompt(store: TeamStore, member: dict, task: dict, *, write_d
             "never assume you can modify shared project files. Save deliverables there and list the paths in your result."
         )
     return "\n".join(lines)
+
+
+def _leader_user_text(ctx: ChatRunContext, run_data: ChatMessage) -> str:
+    """Leader 看到的是同一條用戶消息：有 Skill 時總頭在前，團隊任務說明接在後面。"""
+
+    skill_message = str(getattr(ctx, "forced_skill_message", "") or "")
+    if skill_message:
+        goal = f"为本轮目标组建团队并创建共享任务。\n\n{skill_message}"
+    else:
+        goal = f"为本轮目标组建团队并创建共享任务：\n{run_data.message}"
+    return compose_turn_user_text(
+        message=goal,
+        note=str(getattr(ctx, "user_message_note", "") or ctx.memory_recall_text),
+    )
+
+
+def _member_turn_text(ctx: ChatRunContext, store: TeamStore, member_id: str, task: dict, _run_data: ChatMessage) -> str:
+    """Member 的任務說明接在同一份 Skill 總頭後面，避免再抄一份截斷正文。"""
+
+    task_text = _member_user_prompt(store, member_id, task)
+    skill_message = str(getattr(ctx, "forced_skill_message", "") or "")
+    body = f"{skill_message}\n\n{task_text}" if skill_message else task_text
+    return compose_turn_user_text(
+        message=body,
+        note=str(getattr(ctx, "user_message_note", "") or ""),
+    )
 
 
 def _member_user_prompt(store: TeamStore, member_id: str, task: dict) -> str:

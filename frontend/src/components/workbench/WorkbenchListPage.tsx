@@ -119,9 +119,13 @@ export function WorkbenchListRow({
     </span>
   );
 
-  const columnsClassName = meta
-    ? 'lg:grid-cols-[2.5rem_minmax(10rem,14rem)_minmax(0,1fr)_minmax(16rem,19rem)]'
-    : 'lg:grid-cols-[2.5rem_minmax(10rem,14rem)_minmax(0,1fr)]';
+  const columnsClassName = description
+    ? (meta
+      ? 'lg:grid-cols-[2.5rem_minmax(10rem,14rem)_minmax(0,1fr)_minmax(16rem,19rem)]'
+      : 'lg:grid-cols-[2.5rem_minmax(10rem,14rem)_minmax(0,1fr)]')
+    : (meta
+      ? 'lg:grid-cols-[2.5rem_minmax(10rem,1fr)_auto]'
+      : 'lg:grid-cols-[2.5rem_minmax(0,1fr)]');
 
   const content = layout === 'columns' ? (
     <span className={cn('grid min-w-0 flex-1 grid-cols-[2.5rem_minmax(0,1fr)] items-center gap-x-4', columnsClassName)}>

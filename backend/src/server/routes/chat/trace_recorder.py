@@ -98,7 +98,7 @@ def _workspace_trace_payload(guardrails: AgentGuardrails) -> dict:
         "backend": guardrails.execution_backend,
         "filesystemScope": guardrails.filesystem_scope,
         "networkEnabled": guardrails.network_enabled,
-        "toolPermissionProfile": guardrails.tool_permission_profile,
+        "operationScope": guardrails.operation_scope,
         "permissionProfile": guardrails.permission_profile.audit_payload(),
         "timeoutSeconds": guardrails.timeout_seconds,
         "dockerImage": guardrails.docker_image if guardrails.execution_backend == "docker" else "",
@@ -132,7 +132,7 @@ def _record_workspace_event(
         title=title,
         content=(
             f"{payload['backend']} · scope={payload['filesystemScope']} · "
-            f"profile={payload['toolPermissionProfile']}"
+            f"scope={payload['operationScope']}"
         ),
         payload=payload,
     )
@@ -149,13 +149,7 @@ def _record_workspace_event(
             f"policy={guardrails.permission_profile.tool_policy.value} · "
             f"network={guardrails.permission_profile.network_enabled}"
         ),
-        payload={
-            "policy": guardrails.permission_profile.audit_payload(),
-            "legacy": {
-                "toolPermissionMode": guardrails.tool_permission_mode,
-                "toolPermissionProfile": guardrails.tool_permission_profile,
-            },
-        },
+        payload={"policy": guardrails.permission_profile.audit_payload()},
     )
 
 
@@ -215,10 +209,6 @@ def _permission_decision_payload(event_data: dict, guardrails: AgentGuardrails) 
         "reason": reason,
         "toolCallId": str(event_data.get("tool_call_id") or ""),
         "policy": guardrails.permission_profile.audit_payload(),
-        "legacy": {
-            "toolPermissionMode": guardrails.tool_permission_mode,
-            "toolPermissionProfile": guardrails.tool_permission_profile,
-        },
     }
 
 
@@ -266,15 +256,11 @@ def _permission_reason(
 
     profile = guardrails.permission_profile
     if decision == PermissionDecision.DENY and profile.is_read_only:
-        return "read_only profile denies write/execute/configure actions"
+        return "read_only scope denies write/execute/configure actions"
     if decision == PermissionDecision.DENY and resource_type in {ResourceType.MCP, ResourceType.KNOWLEDGE_TOOL}:
         return "network resource denied by network policy"
-    if decision == PermissionDecision.ASK and profile.human_approval:
-        return "human approval is enabled for this Agent"
-    if decision == PermissionDecision.ASK:
-        return f"policy {profile.tool_policy.value} requires confirmation for {action.value}"
     if decision == PermissionDecision.ALLOW:
-        return f"policy {profile.tool_policy.value} allows {tool_name}"
+        return f"operation scope allows {tool_name}"
     return "decision inherited from parent policy"
 
 

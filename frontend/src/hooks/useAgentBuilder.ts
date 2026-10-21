@@ -20,8 +20,7 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export function useAgentBuilder(): UseAgentBuilderReturn {
-  const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
-  const activeProjectId = useAppStore((state) => state.activeProjectId);
+    const activeProjectSlug = useAppStore((state) => state.activeProjectSlug);
   const [planning, setPlanning] = useState(false);
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -56,8 +55,8 @@ export function useAgentBuilder(): UseAgentBuilderReturn {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           plan,
-          workspaceId: activeWorkspaceId,
-          projectId: activeProjectId,
+          
+          projectSlug: activeProjectSlug,
         }),
       });
     } catch (err) {
@@ -67,7 +66,7 @@ export function useAgentBuilder(): UseAgentBuilderReturn {
     } finally {
       setApplying(false);
     }
-  }, [activeProjectId, activeWorkspaceId]);
+  }, [activeProjectSlug]);
 
   return { planning, applying, error, createPlan, applyPlan };
 }

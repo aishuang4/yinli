@@ -77,10 +77,19 @@ export interface JobCapabilityContract {
   confirmedAt?: string | null;
 }
 
+export interface FrozenSkillRecord {
+  id: string;
+  name: string;
+  sourceScope: string;
+  sourcePath: string;
+  contentSha256: string;
+  frozenAt: string;
+  origin: string;
+}
+
 export interface ScheduledJob {
   id: string;
-  workspaceId: string;
-  projectId: string;
+  projectSlug: string;
   name: string;
   summary: string;
   status: JobStatus;
@@ -95,6 +104,7 @@ export interface ScheduledJob {
   lastRunAt: string | null;
   frozenPrompt: string;
   skillIds: string[];
+  requiredSkills: FrozenSkillRecord[];
   toolScope: JobToolScope;
   inputSpec: Record<string, unknown>;
   outputSpec: Record<string, unknown>;
@@ -135,8 +145,7 @@ export interface JobOutputManifest {
 export interface ScheduledJobRun {
   id: string;
   jobId: string;
-  workspaceId: string;
-  projectId: string;
+  projectSlug: string;
   trigger: FiringTrigger;
   scheduledFor: string;
   status: FiringStatus;
@@ -158,3 +167,18 @@ export interface ScheduledJobSchedulePatch {
   scheduleExpr?: JobScheduleExpr;
   timezone?: string;
 }
+
+export interface ScheduledJobWritePayload {
+  name: string;
+  summary: string;
+  agentId: string;
+  scheduleKind: ScheduleKind;
+  scheduleExpr: JobScheduleExpr;
+  timezone: string;
+  frozenPrompt: string;
+  skillIds: string[];
+  taskIntent?: string;
+}
+
+/** 只包含改过的字段。已启用任务若带上执行者、提示词或 Skill，会回到待确认。 */
+export type ScheduledJobFieldPatch = Partial<Omit<ScheduledJobWritePayload, 'taskIntent'>>;

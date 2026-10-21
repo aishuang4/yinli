@@ -2,7 +2,7 @@
  * ScheduledJobLandingPage — 定时任务第一层列表入口。
  */
 
-import { CalendarClock, List, Pause, Play, RefreshCw, Trash2 } from 'lucide-react';
+import { CalendarClock, List, Pause, Play, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { Button, Tag } from '@/components/design';
 import { SelectField, TextField } from '../../components/form';
 import {
@@ -44,6 +44,7 @@ interface ScheduledJobLandingPageProps {
   onQueryChange: (value: string) => void;
   onStatusFilterChange: (value: string) => void;
   onRefresh: () => void;
+  onCreate: () => void;
   onSelect: (job: ScheduledJob) => void;
   onConfirm: (job: ScheduledJob) => void;
   onPause: (job: ScheduledJob) => void;
@@ -63,6 +64,7 @@ export function ScheduledJobLandingPage({
   onQueryChange,
   onStatusFilterChange,
   onRefresh,
+  onCreate,
   onSelect,
   onConfirm,
   onPause,
@@ -84,13 +86,21 @@ export function ScheduledJobLandingPage({
           <Button icon={<RefreshCw size={14} />} onClick={onRefresh} loading={loading}>
             刷新
           </Button>
+          <Button
+            type="primary"
+            icon={<Plus size={14} />}
+            disabled={schedulerEnabled !== true}
+            onClick={onCreate}
+          >
+            新建任务
+          </Button>
         </>
       )}
     >
       {schedulerEnabled === false ? (
         <div className="mb-5">
           <WorkbenchEmptyPanel>
-            {SCHEDULER_DISABLED_DETAIL}。当前只能查看任务，确认启用、暂停、删除和改调度不可用。
+            {SCHEDULER_DISABLED_DETAIL}。当前只能查看任务，新建、编辑、确认启用、暂停和删除不可用。
           </WorkbenchEmptyPanel>
         </div>
       ) : null}
@@ -120,7 +130,7 @@ export function ScheduledJobLandingPage({
           <WorkbenchEmptyPanel>
             {schedulerEnabled === false
               ? '调度未启用，暂无定时任务。'
-              : '暂无定时任务。在 Chat 中登记周期任务后，可在此确认启用。'}
+              : '暂无定时任务。可以新建，或在 Chat 中登记后到这里确认启用。'}
           </WorkbenchEmptyPanel>
         ) : (
           <WorkbenchList>

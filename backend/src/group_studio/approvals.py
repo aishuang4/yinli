@@ -99,7 +99,7 @@ def build_confirm_event(*, reply_id: str, tool_calls: list[dict[str, Any]], conf
 def decide_approval(
     group_id: str,
     *,
-    project_id: str,
+    project_slug: str,
     approval_id: str,
     decision: str,
 ) -> GroupApproval:
@@ -108,7 +108,7 @@ def decide_approval(
     snapshot = get_group_studio_snapshot(group_id, message_limit=1)
     if snapshot is None:
         raise GroupStudioError(404, GROUP_STUDIO_NOT_FOUND)
-    if project_id and project_id != str(snapshot.get("projectId") or ""):
+    if project_slug and project_slug != str(snapshot.get("projectSlug") or ""):
         raise GroupStudioError(422, CROSS_PROJECT_SESSION)
     assert_can_mutate(str(snapshot.get("status") or ""))
     if str(snapshot.get("status") or "") == "paused":

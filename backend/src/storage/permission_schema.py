@@ -4,8 +4,7 @@ PERMISSION_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS permission_decisions (
     id TEXT PRIMARY KEY,
     tenant_id TEXT NOT NULL,
-    workspace_id TEXT NOT NULL,
-    project_id TEXT NOT NULL,
+    project_slug TEXT NOT NULL,
     session_id TEXT NOT NULL,
     run_id TEXT NOT NULL,
     actor_id TEXT NOT NULL,

@@ -37,14 +37,14 @@ def client(isolated_db):
 
 def _studio_with_pin(client: TestClient):
     created = client.post("/api/group-studio/from-chat", json={
-        "projectId": DEFAULT_PROJECT_ID,
+        "projectSlug": DEFAULT_PROJECT_ID,
         "chatSessionId": "sess-archive",
         "agentId": "default",
     })
     assert created.status_code == 200, created.text
     group_id = created.json()["id"]
     put = client.put(f"/api/group-studio/{group_id}/pin", json={
-        "projectId": DEFAULT_PROJECT_ID,
+        "projectSlug": DEFAULT_PROJECT_ID,
         "goal": "为 Q3 销售数据做一份按地区汇总的分析报告",
     })
     assert put.status_code == 200, put.text

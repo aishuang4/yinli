@@ -70,7 +70,7 @@ async def test_mode_matrix_changes_only_decision_source(risk_class, updates, man
         "PlanEnterTool", "SpawnMember", "DelegateTask", "ResetTools", "ReadMailbox",
     )],
     *[(name, "mutation", "low_risk") for name in (
-        "MemoryAdd", "MemoryUpdate", "TimelineIngest", "SkillDraftPropose",
+        "MemoryAdd", "MemoryUpdate", "TimelineIngest",
         "ScheduleJob", "PauseJob", "RecheckJobCapabilities",
     )],
     ("KnowledgeBaseSearch", "outbound", "low_risk"),
@@ -82,6 +82,45 @@ async def test_mode_matrix_changes_only_decision_source(risk_class, updates, man
 def test_initial_tool_table(tool_class, effect, expected):
     found = classify_risk(_with(action_for(), effect=effect, tool_class=tool_class))
     assert found.risk_class == expected
+
+
+@run_async
+async def test_job_surface_allows_contract_tools_and_denies_the_rest():
+    http = _with(action_for(approvalMode="manual", surface="job"), effect="outbound", tool_class="HttpRequest", tool_name="HttpRequest")
+    write = _with(
+        action_for(approvalMode="manual", surface="job"),
+        effect="mutation",
+        tool_class="MemoryAdd",
+        tool_name="MemoryAdd",
+    )
+    bash = _with(
+        action_for(approvalMode="manual", surface="job"),
+        effect="unknown",
+        tool_class="GuardedBash",
+        tool_name="GuardedBash",
+        normalized_input_json='{"command":"echo hello"}',
+    )
+    opened = _with(
+        action_for(approvalMode="full_access", surface="job"),
+        effect="unknown",
+        tool_class="GuardedBash",
+        tool_name="GuardedBash",
+        normalized_input_json='{"command":"echo hello"}',
+    )
+    hard = _with(
+        action_for(approvalMode="full_access", surface="job"),
+        effect="unknown",
+        tool_class="GuardedBash",
+        tool_name="GuardedBash",
+        normalized_input_json='{"command":"sudo true"}',
+    )
+    assert (await evaluate_policy(http, _open)).verdict == "allow"
+    assert (await evaluate_policy(write, _open)).verdict == "allow"
+    denied = await evaluate_policy(bash, _open)
+    assert denied.verdict == "deny" and denied.review_required is False
+    assert "换一种做法" in denied.reason
+    assert (await evaluate_policy(opened, _open)).verdict == "allow"
+    assert (await evaluate_policy(hard, _open)).verdict == "deny"
 
 
 def test_tool_table_and_shell_patterns():
@@ -137,6 +176,16 @@ def test_comment_change_invalidates_fingerprint_without_stripping():
     assert original.fingerprint != changed.fingerprint
 
 
+def test_smartguard_token_accepts_wrapped_first_word():
+    from src.security.authorization.review_contract import parse_smartguard_token
+
+    assert parse_smartguard_token("  Allow. ") == "allow"
+    assert parse_smartguard_token("`needs_human`") == "needs_human"
+    assert parse_smartguard_token("deny\nbecause it deletes the disk") == "deny"
+    with pytest.raises(ValueError):
+        parse_smartguard_token("maybe allow")
+
+
 def test_smartguard_resource_matches_approved_appendix():
     from pathlib import Path
     from src.security.authorization.prompt_provider import load_smartguard_prompt
@@ -152,8 +201,8 @@ def test_smartguard_resource_matches_approved_appendix():
         body, cursor = cursor.split("```", 1)
         fences.append(body.strip("\n"))
     prompt = load_smartguard_prompt()
-    assert prompt.version == "smartguard-2026-10-19"
-    assert "d97007c3" in Path(__file__).parents[1].joinpath(
+    assert prompt.version == "smartguard-2026-10-21"
+    assert "20acba03" in Path(__file__).parents[1].joinpath(
         "src/security/authorization/prompts/smartguard.md",
     ).read_text(encoding="utf-8")
     assert prompt.system == fences[0]

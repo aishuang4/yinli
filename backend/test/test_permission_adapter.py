@@ -58,7 +58,7 @@ async def build_action(tool, call_id, canonical):
     """确定性内存快照，不读任何真实目标。"""
 
     return ActionSnapshot(authorization=RunAuthorization(
-        tenantId="local", workspaceId="w", projectId="p", sessionId="s", runId="r",
+        tenantId="local", projectSlug="p", sessionId="s", runId="r",
         actorId="a", capabilityVersion="1"), callId=call_id, toolName=tool.name,
         toolVersion="1", normalizedInputJson=canonical)
 

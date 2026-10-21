@@ -1,4 +1,4 @@
-"""权限 V2 公开展示边界；执行参数只在服务端现场，不沿 SSE 或 Trace 分片泄露。"""
+"""权限 V2 公开展示边界。执行仍用服务端原参数；前端串流保留工具参数，完整凭据片段就地脱敏。"""
 
 import copy
 import json
@@ -40,10 +40,11 @@ def public_authorization_event(agent, event_type: str, data: dict) -> dict:
         buffers[call_id] = ""
     if event_type == "TOOL_CALL_DELTA":
         buffered = buffers.get(call_id, "")
+        piece = str(result.get("delta") or "")
         if buffered is not None:
-            buffered += str(result.get("delta") or "")
+            buffered += piece
             buffers[call_id] = buffered if len(buffered) <= MAX_BUFFERED_INPUT else None
-        result["delta"] = ""
+        result["delta"] = display_input(piece)
     if event_type == "TOOL_CALL_END":
         buffered = buffers.pop(call_id, "")
         if result.get("input") is None and result.get("arguments") is None:

@@ -10,7 +10,6 @@ from src.memory.markdown_store import MarkdownMemoryStore
 from src.memory.nodes import MemoryNodeService, MemoryNodeWrite
 from src.memory.prompt_cache import invalidate_memory_prompts
 from src.memory.settings import get_memory_admission_policy, save_memory_admission_policy
-from src.memory.skill_evolution import register_skill_evolution_record
 from src.memory.timeline import search_timeline
 from src.memory.trace import MEMORY_AUDIT_EVENT_TYPE, record_memory_audit_event
 from src.server.routes.memory_api.models import *
@@ -19,14 +18,11 @@ from src.storage.database import (
     count_pending_memory_markdown_candidates,
     get_memory_markdown_candidate,
     get_memory_node,
-    get_skill_evolution_record,
     list_memory_markdown_candidates,
     list_run_events_by_type,
-    list_skill_evolution_records,
     record_memory_retrieval_feedback,
     set_memory_markdown_candidate_status,
     update_memory_node_status,
-    update_skill_evolution_record_status,
 )
 from src.vector_store.policy import get_vector_store_policy
 
@@ -36,14 +32,14 @@ router = APIRouter()
 async def list_markdown_candidates(
     status: str | None = Query(default="pending", pattern="^(pending|accepted|rejected|failed)$"),
     scope: str | None = Query(default=None, pattern="^(user|agent|global_preference)$"),
-    project_id: Annotated[str, Query(alias="projectId")] = "default",
+    project_slug: Annotated[str, Query(alias="projectSlug")] = "default",
     limit: int = Query(default=50, ge=1, le=200),
 ) -> MarkdownCandidateListResponse:
     """列出 user / global 层待用户确认的 Markdown 记忆候选。"""
 
     return MarkdownCandidateListResponse(
-        records=list_memory_markdown_candidates(status=status, scope=scope, project_id=project_id, limit=limit),
-        pendingCount=count_pending_memory_markdown_candidates(project_id=project_id),
+        records=list_memory_markdown_candidates(status=status, scope=scope, project_slug=project_slug, limit=limit),
+        pendingCount=count_pending_memory_markdown_candidates(project_slug=project_slug),
     )
 
 
@@ -51,14 +47,14 @@ async def list_markdown_candidates(
 async def update_markdown_candidate(
     record_id: str,
     data: MarkdownCandidateAction,
-    project_id: Annotated[str, Query(alias="projectId")] = "default",
+    project_slug: Annotated[str, Query(alias="projectSlug")] = "default",
 ) -> dict[str, Any]:
     """采纳（真正写入 Markdown）或拒绝一条候选。"""
 
     from src.memory.reflection import apply_markdown_candidate
 
     record = get_memory_markdown_candidate(record_id)
-    if not record or str(record.get("projectId") or "default") != project_id:
+    if not record or str(record.get("projectSlug") or "default") != project_slug:
         raise HTTPException(status_code=404, detail="Memory candidate not found")
     if record.get("status") != "pending":
         raise HTTPException(status_code=400, detail="Only pending candidates can be resolved")
@@ -158,7 +154,7 @@ async def write_user_markdown_memory(user_id: str, data: MarkdownMemoryUpdate) -
 async def read_default_global_markdown_memory() -> dict[str, Any]:
     """读取唯一全局偏好 Markdown 记忆；不存在时返回默认模板但不创建文件。"""
 
-    doc = MarkdownMemoryStore().read_global_memory("default")
+    doc = MarkdownMemoryStore().read_global_memory()
     return _markdown_doc_response(doc)
 
 
@@ -166,24 +162,8 @@ async def read_default_global_markdown_memory() -> dict[str, Any]:
 async def write_default_global_markdown_memory(data: MarkdownMemoryUpdate) -> dict[str, Any]:
     """保存唯一全局偏好 Markdown 记忆；首次保存时创建文件。"""
 
-    doc = MarkdownMemoryStore().write_global_memory("default", data.content)
+    doc = MarkdownMemoryStore().write_global_memory(data.content)
     invalidate_memory_prompts()
     return _markdown_doc_response(doc)
 
-
-@router.get("/markdown/global/{workspace_id}")
-async def read_global_markdown_memory(workspace_id: str = "default") -> dict[str, Any]:
-    """读取全局偏好 Markdown 记忆；不存在时返回默认模板但不创建文件。"""
-
-    doc = MarkdownMemoryStore().read_global_memory(workspace_id)
-    return _markdown_doc_response(doc)
-
-
-@router.put("/markdown/global/{workspace_id}")
-async def write_global_markdown_memory(workspace_id: str, data: MarkdownMemoryUpdate) -> dict[str, Any]:
-    """保存全局偏好 Markdown 记忆；首次保存时创建文件。"""
-
-    doc = MarkdownMemoryStore().write_global_memory(workspace_id, data.content)
-    invalidate_memory_prompts()
-    return _markdown_doc_response(doc)
 

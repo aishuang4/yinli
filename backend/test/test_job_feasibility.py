@@ -98,8 +98,8 @@ def test_weather_without_web_is_impossible(monkeypatch):
     result = evaluate_job_feasibility(
         task_intent="2分钟后帮我调用看一下今天天气",
         agent_id="agent-1",
-        workspace_id=DEFAULT_WORKSPACE_ID,
-        project_id=DEFAULT_PROJECT_ID,
+        
+        project_slug=DEFAULT_PROJECT_ID,
         include_suggestions=False,
     )
     assert result.verdict == "impossible"
@@ -119,8 +119,8 @@ def test_email_without_channel_is_partial(monkeypatch):
     result = evaluate_job_feasibility(
         task_intent="每周五给客户发周报邮件",
         agent_id="agent-1",
-        workspace_id=DEFAULT_WORKSPACE_ID,
-        project_id=DEFAULT_PROJECT_ID,
+        
+        project_slug=DEFAULT_PROJECT_ID,
         include_suggestions=False,
     )
     assert result.verdict == "partial"
@@ -145,8 +145,8 @@ def test_email_http_request_only_is_not_ok(monkeypatch):
     result = evaluate_job_feasibility(
         task_intent="发邮件给客户",
         agent_id="agent-1",
-        workspace_id=DEFAULT_WORKSPACE_ID,
-        project_id=DEFAULT_PROJECT_ID,
+        
+        project_slug=DEFAULT_PROJECT_ID,
         include_suggestions=False,
     )
     assert result.verdict != "ok"
@@ -165,8 +165,8 @@ def test_trusted_gmail_send_is_ok(monkeypatch):
     result = evaluate_job_feasibility(
         task_intent="每周五给客户发周报邮件",
         agent_id="agent-1",
-        workspace_id=DEFAULT_WORKSPACE_ID,
-        project_id=DEFAULT_PROJECT_ID,
+        
+        project_slug=DEFAULT_PROJECT_ID,
         include_suggestions=False,
     )
     assert result.verdict == "ok"
@@ -188,8 +188,8 @@ def test_send_only_without_channel_is_impossible(monkeypatch):
     result = evaluate_job_feasibility(
         task_intent="只发送邮件给客户，不要生成文件",
         agent_id="agent-1",
-        workspace_id=DEFAULT_WORKSPACE_ID,
-        project_id=DEFAULT_PROJECT_ID,
+        
+        project_slug=DEFAULT_PROJECT_ID,
         include_suggestions=False,
     )
     assert result.verdict == "impossible"
@@ -202,7 +202,7 @@ def test_schedule_job_gate_rejects_email_without_accept_partial(isolated_db, mon
         "id": "agent-1",
         "name": "agent-1",
         "system_prompt": "p",
-        "workspaceId": DEFAULT_WORKSPACE_ID,
+        
         "status": "idle",
         "role": "job",
         "jobToolkit": {
@@ -221,8 +221,8 @@ def test_schedule_job_gate_rejects_email_without_accept_partial(isolated_db, mon
     service = ScheduledJobService()
     with pytest.raises(ScheduledJobValidationError, match="不能"):
         service.create_job(
-            workspace_id=DEFAULT_WORKSPACE_ID,
-            project_id=DEFAULT_PROJECT_ID,
+            
+            project_slug=DEFAULT_PROJECT_ID,
             name="空头发信",
             agent_id="agent-1",
             schedule_kind="weekly",
@@ -232,8 +232,8 @@ def test_schedule_job_gate_rejects_email_without_accept_partial(isolated_db, mon
             task_intent="每周五给客户发周报邮件",
         )
     job = service.create_job(
-        workspace_id=DEFAULT_WORKSPACE_ID,
-        project_id=DEFAULT_PROJECT_ID,
+        
+        project_slug=DEFAULT_PROJECT_ID,
         name="降级周报",
         agent_id="agent-1",
         schedule_kind="weekly",
@@ -264,8 +264,8 @@ def test_chat_agent_cannot_run_scheduled_jobs(monkeypatch):
     result = evaluate_job_feasibility(
         task_intent="2分钟后帮我调用看一下今天天气",
         agent_id="default",
-        workspace_id=DEFAULT_WORKSPACE_ID,
-        project_id=DEFAULT_PROJECT_ID,
+        
+        project_slug=DEFAULT_PROJECT_ID,
         include_suggestions=False,
     )
     assert result.verdict == "impossible"
@@ -284,8 +284,8 @@ def test_required_webfetch_is_not_stripped_for_weather(monkeypatch):
     result = evaluate_job_feasibility(
         task_intent="2分钟后帮我调用看一下今天天气",
         agent_id="agent-1",
-        workspace_id=DEFAULT_WORKSPACE_ID,
-        project_id=DEFAULT_PROJECT_ID,
+        
+        project_slug=DEFAULT_PROJECT_ID,
         include_suggestions=False,
     )
     assert result.verdict == "ok"
@@ -306,8 +306,8 @@ def test_optional_mismatch_keeps_required_tools(monkeypatch):
     result = evaluate_job_feasibility(
         task_intent="每周五给客户发周报邮件",
         agent_id="agent-1",
-        workspace_id=DEFAULT_WORKSPACE_ID,
-        project_id=DEFAULT_PROJECT_ID,
+        
+        project_slug=DEFAULT_PROJECT_ID,
         include_suggestions=False,
     )
     assert result.verdict == "partial"

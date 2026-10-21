@@ -7,11 +7,14 @@ import { FileImportButton } from '../../components/FileImportButton';
 import { ChatAgentChip, useChatComposerAgents } from './ChatAgentSelect';
 import { ChatComposerPlusMenu, ChatCompressChip, ChatDeepThinkChip, ChatPlanChip } from './ChatComposerPlusMenu';
 import type { PlusMenuCategory } from './plusMenu';
-import { ChatForcedSkillChips, ChatSkillSlashMenu } from './ChatSkillPicker';
+import { ChatSkillSlashMenu, SkillHighlightText } from './ChatSkillPicker';
 import {
   consumeSlashQuery,
+  inlineSkillIds,
+  insertSkillToken,
+  MAX_FORCED_SKILLS,
   readSlashQuery,
-  toggleForcedSkillId,
+  removeInlineSkill,
 } from './forcedSkills';
 import { buildSlashList, type ComposerSlashCommand } from './slashCommands';
 import type { Skill } from '../../types/skill';
@@ -67,7 +70,7 @@ export function ChatComposer(props: ChatComposerProps) {
     onAcceptFiles, onCompositionEnd, onCompositionStart, onFile, onImageFiles, onInputChange,
     onKeyDown, onRemoveFile, onRemoveImage, onSelectedAgentChange, onSend,
     onTargetModeChange, onToggleDeepThinking, onTogglePlanMode,
-    composerSkills = [], forcedSkillIds = [], skillsLoading = false, onForcedSkillIdsChange,
+    composerSkills = [], skillsLoading = false, onForcedSkillIdsChange,
     forceCompress = false, onForceCompressChange,
   } = props;
   const teamModeEnabled = props.teamModeEnabled !== false;
@@ -78,12 +81,16 @@ export function ChatComposer(props: ChatComposerProps) {
   const [plusOpen, setPlusOpen] = useState(false);
   const [plusCategory, setPlusCategory] = useState<PlusMenuCategory>('files');
   const fileImportHostRef = useRef<HTMLSpanElement>(null);
+  const skillMirrorRef = useRef<HTMLDivElement>(null);
   const { agents, loading: composerAgentsLoading, hostRef: agentHostRef } = useChatComposerAgents();
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) ?? agents[0] ?? null;
+  const inlineSkills = useMemo(
+    () => inlineSkillIds(inputValue, composerSkills),
+    [composerSkills, inputValue],
+  );
   const showChips = (targetMode === 'agent' && planModeEnabled && planMode)
     || deepThinking
-    || forceCompress
-    || forcedSkillIds.length > 0;
+    || forceCompress;
   const slashQuery = readSlashQuery(inputValue, cursor);
   const slashOpen = Boolean(slashQuery) && !slashDismissed && !isStreaming;
   const slashItems = useMemo(
@@ -118,18 +125,28 @@ export function ChatComposer(props: ChatComposerProps) {
     });
   };
 
-  const pinForcedSkill = (skill: Skill) => {
-    if (!onForcedSkillIdsChange) return;
-    if (!forcedSkillIds.includes(skill.id)) {
-      onForcedSkillIdsChange(toggleForcedSkillId(forcedSkillIds, skill.id));
+  const toggleInlineSkill = (skill: Skill) => {
+    if (inlineSkills.includes(skill.id)) {
+      const next = removeInlineSkill(inputValue, skill);
+      applyCursor(next, Math.min(cursor, next.length));
+      return;
     }
+    if (inlineSkills.length >= MAX_FORCED_SKILLS) return;
+    const next = insertSkillToken(inputValue, cursor, skill.name);
+    applyCursor(next.value, next.cursor);
   };
 
   const pickSlashSkill = (skill: Skill) => {
     if (!slashQuery) return;
-    pinForcedSkill(skill);
-    const next = consumeSlashQuery(inputValue, slashQuery);
-    applyCursor(next, Math.min(slashQuery.start, next.length));
+    if (!inlineSkills.includes(skill.id) && inlineSkills.length >= MAX_FORCED_SKILLS) return;
+    if (inlineSkills.includes(skill.id)) {
+      const next = consumeSlashQuery(inputValue, slashQuery);
+      applyCursor(next, Math.min(slashQuery.start, next.length));
+      setSlashDismissed(true);
+      return;
+    }
+    const next = insertSkillToken(inputValue, slashQuery.end, skill.name);
+    applyCursor(next.value, next.cursor);
     setSlashDismissed(true);
   };
 
@@ -195,7 +212,7 @@ export function ChatComposer(props: ChatComposerProps) {
         {slashOpen ? (
           <ChatSkillSlashMenu
             items={slashItems}
-            selectedIds={forcedSkillIds}
+            selectedIds={inlineSkills}
             highlightedIndex={highlightedIndex}
             loading={skillsLoading}
             query={slashQuery?.query || ''}
@@ -212,30 +229,44 @@ export function ChatComposer(props: ChatComposerProps) {
           className="hidden"
           onChange={(event: ChangeEvent<HTMLInputElement>) => onImageFiles(event.target.files)}
         />
-        <textarea
-          ref={messageInputRef}
-          value={inputValue}
-          onChange={(event) => {
-            onInputChange(event.target.value);
-            setCursor(event.target.selectionStart ?? event.target.value.length);
-          }}
-          onSelect={(event) => setCursor(event.currentTarget.selectionStart ?? 0)}
-          onClick={(event) => setCursor(event.currentTarget.selectionStart ?? 0)}
-          onKeyUp={(event) => setCursor(event.currentTarget.selectionStart ?? 0)}
-          onKeyDown={handleComposerKeyDown}
-          onPaste={(event) => {
-            const files = filesFromTransfer(event.clipboardData);
-            if (files.length === 0) return;
-            event.preventDefault();
-            onAcceptFiles(files);
-          }}
-          onCompositionStart={onCompositionStart}
-          onCompositionEnd={onCompositionEnd}
-          placeholder={isStreaming ? '给正在执行的 Agent 补充信息...' : '输入消息，可粘贴或拖入文件，或用 / 选择指令和 Skill...'}
-          rows={2}
-          className="block max-h-[180px] w-full resize-none rounded-t-lg border-0 bg-transparent px-4 pb-0 pt-3 text-base text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
-          aria-label="消息输入框"
-        />
+        <div className="chat-skill-input">
+          <div ref={skillMirrorRef} aria-hidden className="chat-skill-input__mirror">
+            {inputValue ? (
+              <SkillHighlightText text={inputValue} skills={composerSkills} />
+            ) : (
+              <span className="chat-skill-input__placeholder">
+                {isStreaming ? '给正在执行的 Agent 补充信息...' : '输入消息，可粘贴或拖入文件，或用 / 选择指令和 Skill...'}
+              </span>
+            )}
+            <br />
+          </div>
+          <textarea
+            ref={messageInputRef}
+            value={inputValue}
+            onChange={(event) => {
+              onInputChange(event.target.value);
+              setCursor(event.target.selectionStart ?? event.target.value.length);
+            }}
+            onSelect={(event) => setCursor(event.currentTarget.selectionStart ?? 0)}
+            onClick={(event) => setCursor(event.currentTarget.selectionStart ?? 0)}
+            onKeyUp={(event) => setCursor(event.currentTarget.selectionStart ?? 0)}
+            onScroll={(event) => {
+              if (skillMirrorRef.current) skillMirrorRef.current.scrollTop = event.currentTarget.scrollTop;
+            }}
+            onKeyDown={handleComposerKeyDown}
+            onPaste={(event) => {
+              const files = filesFromTransfer(event.clipboardData);
+              if (files.length === 0) return;
+              event.preventDefault();
+              onAcceptFiles(files);
+            }}
+            onCompositionStart={onCompositionStart}
+            onCompositionEnd={onCompositionEnd}
+            rows={2}
+            className="chat-skill-input__field"
+            aria-label="消息输入框"
+          />
+        </div>
         {showChips ? (
           <div className="flex flex-wrap gap-1.5 px-3 pt-2">
             {targetMode === 'agent' && planModeEnabled && planMode ? (
@@ -246,14 +277,6 @@ export function ChatComposer(props: ChatComposerProps) {
             ) : null}
             {forceCompress ? (
               <ChatCompressChip disabled={isStreaming} onRemove={() => onForceCompressChange?.(false)} />
-            ) : null}
-            {onForcedSkillIdsChange ? (
-              <ChatForcedSkillChips
-                skills={composerSkills}
-                selectedIds={forcedSkillIds}
-                disabled={isStreaming}
-                onRemove={(skillId) => onForcedSkillIdsChange(forcedSkillIds.filter((id) => id !== skillId))}
-              />
             ) : null}
           </div>
         ) : null}
@@ -321,7 +344,7 @@ export function ChatComposer(props: ChatComposerProps) {
             selectedAgentId={selectedAgent?.id || selectedAgentId}
             agentsLoading={composerAgentsLoading || agentsLoading}
             skills={composerSkills}
-            selectedSkillIds={forcedSkillIds}
+            selectedSkillIds={inlineSkills}
             skillsEnabled={Boolean(onForcedSkillIdsChange)}
             skillsLoading={skillsLoading}
             imageDisabled={imageAttachments.length >= 4}
@@ -330,7 +353,7 @@ export function ChatComposer(props: ChatComposerProps) {
             onToggleDeepThinking={onToggleDeepThinking}
             onTargetModeChange={onTargetModeChange}
             onPickAgent={onSelectedAgentChange}
-            onPickSkill={pinForcedSkill}
+            onPickSkill={toggleInlineSkill}
             onUploadImage={() => imageInputRef.current?.click()}
             onUploadFile={triggerFileImport}
           />

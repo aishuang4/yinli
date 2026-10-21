@@ -76,8 +76,7 @@ class BuilderApplyRequest(BaseModel):
     """Apply a confirmed builder draft."""
 
     plan: BuilderPlanResponse
-    workspace_id: str = Field(default="default", alias="workspaceId")
-    project_id: str = Field(default="", alias="projectId")
+    project_slug: str = Field(default="", alias="projectSlug")
 
     model_config = {"populate_by_name": True, "extra": "forbid"}
 
@@ -126,11 +125,9 @@ async def _plan_agents(data: BuilderPlanRequest) -> BuilderPlanResponse:
 async def apply_agents(data: BuilderApplyRequest) -> BuilderApplyResponse:
     """从确认后的草案创建独立 Agent。"""
 
-    project = get_project(data.project_id) if data.project_id else None
-    if data.project_id and project is None:
-        raise HTTPException(status_code=422, detail=f"Project 不存在: {data.project_id}")
-    if project is not None and str(project.get("workspaceId") or "default") != data.workspace_id:
-        raise HTTPException(status_code=422, detail="Project 不属于当前 Workspace")
+    project = get_project(data.project_slug) if data.project_slug else None
+    if data.project_slug and project is None:
+        raise HTTPException(status_code=422, detail=f"Project 不存在: {data.project_slug}")
 
     created_agents: list[AgentResponse] = []
     warnings = list(data.plan.warnings)
@@ -144,8 +141,7 @@ async def apply_agents(data: BuilderApplyRequest) -> BuilderApplyResponse:
             mcpTools=draft.mcp_tools,
             skills=draft.skills,
             tags=draft.tags,
-            guardrails=Guardrails(human_approval=True),
-            workspaceId=data.workspace_id,
+            guardrails=Guardrails(),
         ))
         created_agents.append(agent)
 

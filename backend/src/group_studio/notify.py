@@ -28,12 +28,14 @@ def notify_studio(
 ) -> None:
     """投递一条群聊工作室通知。"""
 
+    from src.tenancy.context import current_tenant
+
     title = title or _TITLES.get(kind, "工作室通知")
     dispatch_notification(NotificationMessage(
         kind=kind,
         title=title,
-        workspace_id=str(snapshot.get("workspaceId") or ""),
-        project_id=str(snapshot.get("projectId") or ""),
+        tenant_id=current_tenant().tenant_id,
+        project_slug=str(snapshot.get("projectSlug") or ""),
         body=body or str(snapshot.get("title") or ""),
         payload={
             "groupStudioId": snapshot.get("id") or "",

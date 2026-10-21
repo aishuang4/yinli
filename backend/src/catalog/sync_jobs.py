@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import logging
 from pathlib import Path
 from typing import Any
@@ -15,48 +16,30 @@ from src.catalog.job_files import (
 )
 
 logger = logging.getLogger(__name__)
+_SYNC_DEPTH: contextvars.ContextVar[int] = contextvars.ContextVar("job_sync_depth", default=0)
 
 
-def _project_root_for(project_id: str) -> Path | None:
-    try:
-        from src.storage.database import get_project
-
-        project = get_project(project_id)
-    except Exception:
-        return None
-    raw = str((project or {}).get("rootPath") or "").strip()
-    return Path(raw) if raw else None
-
-
-def _existing_job_file(job_id: str, *, project_id: str, workspace_id: str) -> JobFileRecord | None:
-    for item in discover_job_files(
-        project_root=_project_root_for(project_id),
-        project_id=project_id,
-        workspace_id=workspace_id,
-    ):
+def _existing_job_file(job_id: str, *, project_id: str) -> JobFileRecord | None:
+    for item in discover_job_files(project_id=project_id):
         if item.id == job_id:
             return item
     return None
 
 
 def persist_job_definition(job: Any) -> None:
-    """把 ScheduledJob 实例的定义字段写回已有文件，否则写入 Workspace catalog。"""
+    """把 ScheduledJob 实例的定义字段写回已有文件，否则写入租户 agents/jobs。"""
 
     status = str(getattr(job, "status", "") or "")
     desired = "active" if status == "active" else "paused"
-    existing = _existing_job_file(
-        str(job.id),
-        project_id=str(job.project_id),
-        workspace_id=str(job.workspace_id),
-    )
+    project_id = str(getattr(job, "project_id", "") or "default")
+    existing = _existing_job_file(str(job.id), project_id=project_id)
     contract = getattr(job, "capability_contract", None)
     contract_intent = str(getattr(contract, "task_intent", "") or "") if contract is not None else ""
     spec = dict(getattr(job, "input_spec", None) or {})
     record = JobFileRecord(
         id=str(job.id),
         name=str(job.name),
-        workspace_id=str(job.workspace_id),
-        project_id=str(job.project_id),
+        project_id=project_id,
         agent_id=str(job.agent_id),
         frozen_prompt=str(job.frozen_prompt),
         mode=str(getattr(job, "mode", "agent") or "agent"),
@@ -76,11 +59,10 @@ def persist_job_definition(job: Any) -> None:
         failure_policy=str(job.failure_policy),
         delivery_policy=str(job.delivery_policy),
         task_intent=contract_intent or (existing.task_intent if existing else "") or str(job.name),
-        source_scope=existing.source_scope if existing else "workspace",
+        source_scope=existing.source_scope if existing else "agents",
         source_path=existing.source_path if existing else "",
     )
     path = Path(existing.source_path) if existing and existing.source_path else job_definition_path(
-        workspace_id=record.workspace_id,
         project_id=record.project_id,
         job_id=record.id,
     )
@@ -136,41 +118,36 @@ def _same_definition(job: Any, payload: dict[str, Any]) -> bool:
     )
 
 
-def sync_job_definitions(*, project_root=None, project_id: str = "default") -> dict[str, int]:
-    """扫描 Job 文件，创建或更新 sqlite 实例，并按 desired_status 启停。"""
+def sync_job_definitions(*, project_root=None, project_id: str = "default", **_extra: object) -> dict[str, int]:
+    """扫描租户 Job 文件，创建或更新 sqlite 实例，并按 desired_status 启停。"""
 
-    from src.scheduler.service import ScheduledJobService
-    from src.storage.database import get_project, get_scheduled_job
-
-    workspace_id = "default"
-    root = Path(project_root) if project_root and str(project_root).strip() else None
+    del project_root, _extra
+    if _SYNC_DEPTH.get() > 0:
+        return {"created": 0, "updated": 0, "activated": 0, "paused": 0}
+    token = _SYNC_DEPTH.set(_SYNC_DEPTH.get() + 1)
     try:
-        project = get_project(project_id) if project_id else None
-        if project:
-            workspace_id = str(project.get("workspaceId") or "default")
-            if root is None:
-                root = _project_root_for(project_id)
-    except Exception:
-        pass
+        return _sync_job_definitions(project_id=project_id)
+    finally:
+        _SYNC_DEPTH.reset(token)
+
+
+def _sync_job_definitions(*, project_id: str) -> dict[str, int]:
+    from src.scheduler.service import ScheduledJobService
+    from src.storage.database import get_scheduled_job
 
     service = ScheduledJobService()
     created = 0
     updated = 0
     activated = 0
     paused = 0
-    for record in discover_job_files(
-        project_root=root,
-        project_id=project_id,
-        workspace_id=workspace_id,
-    ):
+    for record in discover_job_files(project_id=project_id):
         existing = get_scheduled_job(record.id)
         if existing and str(existing.get("status") or "") in {"archived", "completed"}:
             continue
         try:
             if existing is None:
                 job = service.create_job(
-                    workspace_id=record.workspace_id or workspace_id,
-                    project_id=record.project_id or project_id,
+                    project_slug=record.project_id or project_id,
                     name=record.name,
                     agent_id="" if record.mode == "script" else record.agent_id,
                     schedule_kind=record.schedule_kind,

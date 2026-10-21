@@ -13,7 +13,6 @@ from agentscope.message import TextBlock, ToolResultState
 from agentscope.permission import PermissionBehavior, PermissionContext, PermissionDecision
 from agentscope.tool import ToolBase, ToolChunk
 
-from src.agents.system_agents import is_system_agent_id
 from src.scheduler.models import ScheduledJob, ScheduledJobError
 from src.scheduler.service import ScheduledJobService
 from src.scheduler.feasibility import contract_from_feasibility, evaluate_job_feasibility
@@ -47,8 +46,8 @@ _ENABLE_ASKUSER_HINT = (
 )
 
 
-def _job_agent_catalog_line(workspace_id: str = "default") -> str:
-    """把当前可用的 Job Agent 写进登记约定，避免模型拿 Chat 助手去跑任务。"""
+def _job_agent_catalog_line() -> str:
+    """把当前租户可用的 Job Agent 写进登记约定，避免模型拿 Chat 助手去跑任务。"""
 
     try:
         from src.scheduler.job_toolkit import JOB_ROLE, job_toolkit_of
@@ -56,14 +55,7 @@ def _job_agent_catalog_line(workspace_id: str = "default") -> str:
 
         runners = [
             agent for agent in list_registered_agents()
-            if (
-                getattr(agent, "role", "") == JOB_ROLE
-                and job_toolkit_of(agent).required
-                and (
-                    is_system_agent_id(str(getattr(agent, "id", "") or ""))
-                    or str(getattr(agent, "workspace_id", "") or "") == workspace_id
-                )
-            )
+            if getattr(agent, "role", "") == JOB_ROLE and job_toolkit_of(agent).required
         ]
     except Exception:
         runners = []
@@ -81,10 +73,10 @@ def scheduled_job_tools_cache_key(tools: list[ToolBase] | None = None) -> str:
     return f"scheduled-job-tools:{fingerprint}"
 
 
-def scheduled_job_prompt_addendum(workspace_id: str = "default") -> str:
+def scheduled_job_prompt_addendum() -> str:
     """注入主 Agent 的登记约定：AskUser 收集字段后 ScheduleJob，对话内 ConfirmJob 启用。"""
 
-    catalog = _job_agent_catalog_line(workspace_id)
+    catalog = _job_agent_catalog_line()
     return "\n".join([
         "",
         "Scheduled job registration:",
@@ -112,8 +104,8 @@ def scheduled_job_prompt_addendum(workspace_id: str = "default") -> str:
 
 def build_scheduled_job_tools(
     *,
-    workspace_id: str,
-    project_id: str,
+    project_slug: str,
+    cwd: str = "",
     agent_id: str,
     session_id: str,
     service: ScheduledJobService | None = None,
@@ -121,8 +113,8 @@ def build_scheduled_job_tools(
     """构造交互式单 Agent 的 ScheduleJob 工具组。"""
 
     kwargs = {
-        "workspace_id": workspace_id,
-        "project_id": project_id,
+        "project_slug": project_slug,
+        "cwd": cwd,
         "agent_id": agent_id,
         "session_id": session_id,
         "service": service or ScheduledJobService(),
@@ -144,23 +136,23 @@ class _ScheduledJobToolBase(ToolBase):
     is_concurrency_safe: bool = False
     is_external_tool: bool = False
     is_state_injected: bool = False
-    workspace_id: str = ""
-    project_id: str = ""
+    project_slug: str = ""
+    cwd: str = ""
     agent_id: str = ""
     session_id: str = ""
 
     def __init__(
         self,
         *,
-        workspace_id: str,
-        project_id: str,
+        project_slug: str,
+        cwd: str = "",
         agent_id: str,
         session_id: str,
         service: ScheduledJobService | None = None,
     ) -> None:
         super().__init__()
-        self.workspace_id = workspace_id
-        self.project_id = project_id
+        self.project_slug = project_slug
+        self.cwd = cwd
         self.agent_id = agent_id
         self.session_id = session_id
         self._service = service or ScheduledJobService()
@@ -351,8 +343,8 @@ class ScheduleJob(_ScheduledJobToolBase):
                 return self._failure("脚本任务不能同时填写 agent_id、frozen_prompt、skill_ids 或 tool_scope")
             resolved_agent_id = "" if chosen == "script" else (agent_id or self.agent_id).strip()
             job = self._service.create_job(
-                workspace_id=self.workspace_id,
-                project_id=self.project_id,
+                project_slug=self.project_slug,
+                cwd=self.cwd,
                 name=name,
                 agent_id=resolved_agent_id,
                 schedule_kind=schedule_kind,
@@ -417,7 +409,7 @@ class ListJobs(_ScheduledJobToolBase):
     async def __call__(self, status: str = "", **kwargs: Any) -> ToolChunk:
         try:
             jobs = self._service.list_jobs(
-                project_id=self.project_id,
+                project_slug=self.project_slug,
                 status=status or None,
             )
             return self._success({
@@ -461,7 +453,7 @@ class PauseJob(_ScheduledJobToolBase):
             return disabled
         try:
             job = self._service.get_job(job_id)
-            if job.project_id != self.project_id:
+            if job.project_slug != self.project_slug:
                 return self._failure(f"找不到 Job: {job_id}")
             paused = self._service.pause(job_id, reason="user")
         except ScheduledJobError as exc:
@@ -496,7 +488,7 @@ class ConfirmJob(_ScheduledJobToolBase):
             return disabled
         try:
             job = self._service.get_job(job_id)
-            if job.project_id != self.project_id:
+            if job.project_slug != self.project_slug:
                 return self._failure(f"找不到 Job: {job_id}")
             confirmed = self._service.confirm(job_id)
         except ScheduledJobError as exc:
@@ -553,8 +545,7 @@ class CheckJobFeasibility(_ScheduledJobToolBase):
             result = evaluate_job_feasibility(
                 task_intent=task_intent,
                 agent_id=(agent_id or self.agent_id).strip(),
-                workspace_id=self.workspace_id,
-                project_id=self.project_id,
+                project_slug=self.project_slug,
                 required_intents=tuple(required_intents or ()),
             )
         except Exception as exc:
@@ -592,7 +583,7 @@ class RecheckJobCapabilities(_ScheduledJobToolBase):
             return disabled
         try:
             job = self._service.get_job(job_id)
-            if job.project_id != self.project_id:
+            if job.project_slug != self.project_slug:
                 return self._failure(f"找不到 Job: {job_id}")
             intent = str(task_intent or "").strip() or job.capability_contract.task_intent
             if not intent:
@@ -600,8 +591,7 @@ class RecheckJobCapabilities(_ScheduledJobToolBase):
             result = evaluate_job_feasibility(
                 task_intent=intent,
                 agent_id=job.agent_id,
-                workspace_id=job.workspace_id,
-                project_id=job.project_id,
+                project_slug=job.project_slug,
             )
             updated = self._service.update_job(job_id, {
                 "capability_contract": contract_from_feasibility(result).to_storage_dict(),

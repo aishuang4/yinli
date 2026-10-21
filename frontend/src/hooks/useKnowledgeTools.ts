@@ -120,8 +120,7 @@ export function useKnowledgeTools(): UseKnowledgeToolsReturn {
 }
 
 export function useHttpTools(): UseHttpToolsReturn {
-  const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
-  const activeProjectId = useAppStore((state) => state.activeProjectId);
+    const activeProjectSlug = useAppStore((state) => state.activeProjectSlug);
   const [tools, setTools] = useState<HttpTool[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -131,14 +130,14 @@ export function useHttpTools(): UseHttpToolsReturn {
       setLoading(true);
       setError(null);
       setTools(await requestJson<HttpTool[]>(
-        `/api/tools/http?workspaceId=${encodeURIComponent(activeWorkspaceId)}`,
+        `/api/tools/http`,
       ));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load HTTP tools');
     } finally {
       setLoading(false);
     }
-  }, [activeWorkspaceId]);
+  }, []);
 
   const upsertLocal = useCallback((tool: HttpTool) => {
     setTools((prev) => (
@@ -153,9 +152,9 @@ export function useHttpTools(): UseHttpToolsReturn {
       const tool = await requestJson<HttpTool>('/api/tools/http', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...payload, workspaceId: activeWorkspaceId }),
+        body: JSON.stringify({ ...payload,  }),
       });
-      await bindProjectResource(activeProjectId, 'http_tool', tool.id);
+      await bindProjectResource(activeProjectSlug, 'http_tool', tool.id);
       upsertLocal(tool);
       notifySuccess('HTTP 工具创建成功');
       return tool;
@@ -163,7 +162,7 @@ export function useHttpTools(): UseHttpToolsReturn {
       notifyError(`HTTP 工具创建失败：${getErrorMessage(err, '未知错误')}`);
       throw err;
     }
-  }, [activeProjectId, activeWorkspaceId, upsertLocal]);
+  }, [activeProjectSlug, upsertLocal]);
 
   const updateTool = useCallback(async (id: string, payload: Partial<HttpToolPayload>) => {
     try {

@@ -10,7 +10,6 @@ from src.memory.markdown_store import MarkdownMemoryStore
 from src.memory.nodes import MemoryNodeService, MemoryNodeWrite
 from src.memory.prompt_cache import invalidate_memory_prompts
 from src.memory.settings import get_memory_admission_policy, save_memory_admission_policy
-from src.memory.skill_evolution import register_skill_evolution_record
 from src.memory.timeline import search_timeline
 from src.memory.trace import MEMORY_AUDIT_EVENT_TYPE, record_memory_audit_event
 from src.server.routes.memory_api.models import *
@@ -19,14 +18,11 @@ from src.storage.database import (
     count_pending_memory_markdown_candidates,
     get_memory_markdown_candidate,
     get_memory_node,
-    get_skill_evolution_record,
     list_memory_markdown_candidates,
     list_run_events_by_type,
-    list_skill_evolution_records,
     record_memory_retrieval_feedback,
     set_memory_markdown_candidate_status,
     update_memory_node_status,
-    update_skill_evolution_record_status,
 )
 from src.vector_store.policy import get_vector_store_policy
 
@@ -34,7 +30,7 @@ router = APIRouter()
 
 @router.get("/audit/events")
 async def memory_audit_events(
-    project_id: Annotated[str, Query(alias="projectId")] = "default",
+    project_slug: Annotated[str, Query(alias="projectSlug")] = "default",
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> MemoryAuditEventListResponse:
@@ -42,7 +38,7 @@ async def memory_audit_events(
 
     events = list_run_events_by_type(
         MEMORY_AUDIT_EVENT_TYPE,
-        project_id=project_id,
+        project_slug=project_slug,
         include_payload=True,
         limit=limit,
         offset=offset,
@@ -55,7 +51,7 @@ async def record_retrieval_feedback(data: MemoryRetrievalFeedback) -> dict[str, 
     """记录用户对历史记忆召回命中的相关性反馈。"""
 
     node = get_memory_node(data.node_id)
-    if not node or str(node.get("project_id") or "default") != data.project_id:
+    if not node or str(node.get("projectSlug") or "default") != data.project_slug:
         raise HTTPException(status_code=404, detail="Memory node not found")
     feedback = record_memory_retrieval_feedback(
         {

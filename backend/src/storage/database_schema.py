@@ -1,41 +1,203 @@
 """SQLite 当前基础 Schema 声明。"""
 
+from __future__ import annotations
+
+import sqlite3
+
+# 事实源：丢了就丢了。恢复时按行复制。
+FACT_SOURCE_TABLES = (
+    "json_store",
+    "projects",
+    "project_folders",
+    "skill_overrides",
+    "agents",
+    "mcp_servers",
+    "http_tools",
+    "chat_sessions",
+    "chat_messages",
+    "plans",
+    "plan_steps",
+    "plan_events",
+    "plan_revisions",
+    "run_events",
+    "trace_observations",
+    "subagent_invocations",
+    "subagent_transcript_items",
+    "chat_runs",
+    "chat_domain_streams",
+    "chat_domain_events",
+    "projection_streams",
+    "projection_frames",
+    "workflow_runs",
+    "workflow_nodes",
+    "workflow_edges",
+    "workflow_events",
+    "workflow_artifacts",
+    "skill_runs",
+    "memory_markdown_candidates",
+    "session_context_state",
+    "memory_nodes",
+    "memory_retrieval_feedback",
+    "scheduled_jobs",
+    "scheduled_job_runs",
+    "user_notifications",
+    "group_studios",
+    "group_task_cards",
+    "group_memberships",
+    "group_blackboards",
+    "group_messages",
+    "group_runs",
+    "group_approvals",
+    "group_artifacts",
+    "group_work_items",
+    "group_studio_events",
+    "permission_decisions",
+    "permission_approvals",
+    "permission_executions",
+)
+
+# 派生表可随时重建。当前还没有 FTS / 聚合表。
+DERIVED_TABLES: tuple[str, ...] = ()
+
+# 运行时账本描述「此刻谁在跑」。恢复时不复制。表尚未创建，名字先登记。
+LEDGER_TABLES = (
+    "run_leases",
+    "job_firing_leases",
+    "session_admissions",
+)
+
+# 恢复时重建，不从源库复制。
+META_TABLES = (
+    "schema_version",
+    "state_meta",
+)
+
+# 现有库补列。新库的 CREATE TABLE 已带上这些列时，这里仍然幂等。
+SCHEMA_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("permission_decisions", "invalidated_at", "TEXT NOT NULL DEFAULT ''"),
+    ("permission_decisions", "expires_at", "TEXT NOT NULL DEFAULT ''"),
+    ("permission_decisions", "related_decision_id", "TEXT NOT NULL DEFAULT ''"),
+    ("chat_runs", "authorization_json", "TEXT NOT NULL DEFAULT '{}'"),
+    ("chat_runs", "authorization_invalidated_at", "TEXT NOT NULL DEFAULT ''"),
+    ("chat_sessions", "approval_mode", "TEXT NOT NULL DEFAULT 'manual'"),
+    ("scheduled_jobs", "execution_policy", "TEXT NOT NULL DEFAULT '{}'"),
+    ("group_messages", "thinking", "TEXT NOT NULL DEFAULT ''"),
+    ("group_studios", "pending_speaker_member_id", "TEXT NOT NULL DEFAULT ''"),
+    ("group_studios", "awaiting_intake_confirm", "INTEGER NOT NULL DEFAULT 0"),
+    ("group_studios", "speaker_queue_json", "TEXT NOT NULL DEFAULT '[]'"),
+    ("group_studios", "claim_round_json", "TEXT NOT NULL DEFAULT '[]'"),
+    ("group_studios", "last_turn_json", "TEXT NOT NULL DEFAULT '{}'"),
+    ("group_studios", "wave_spoken_json", "TEXT NOT NULL DEFAULT '[]'"),
+    ("chat_messages", "tool_calls", "TEXT NOT NULL DEFAULT '[]'"),
+    ("chat_messages", "thinking", "TEXT NOT NULL DEFAULT ''"),
+    ("chat_messages", "model_caches", "TEXT NOT NULL DEFAULT '[]'"),
+    ("chat_messages", "runtime_events", "TEXT NOT NULL DEFAULT '[]'"),
+    ("chat_messages", "plan_runs", "TEXT NOT NULL DEFAULT '[]'"),
+    (
+        "chat_messages",
+        "display_snapshot",
+        "TEXT NOT NULL DEFAULT '{\"version\":4,\"lastSeq\":0,\"streamDone\":false,\"order\":[],\"blocksById\":{}}'",
+    ),
+    ("chat_sessions", "mode", "TEXT NOT NULL DEFAULT 'agent'"),
+    ("chat_sessions", "model_config_id", "TEXT NOT NULL DEFAULT ''"),
+    ("agents", "role", "TEXT NOT NULL DEFAULT 'chat'"),
+    ("agents", "job_toolkit", "TEXT NOT NULL DEFAULT '{}'"),
+    ("agents", "plan_config", "TEXT NOT NULL DEFAULT '{}'"),
+    ("agents", "knowledge_tools", "TEXT NOT NULL DEFAULT '[]'"),
+    ("chat_sessions", "project_slug", "TEXT NOT NULL DEFAULT 'default'"),
+    ("chat_sessions", "cwd", "TEXT NOT NULL DEFAULT ''"),
+    ("chat_runs", "project_slug", "TEXT NOT NULL DEFAULT 'default'"),
+    ("chat_runs", "cwd", "TEXT NOT NULL DEFAULT ''"),
+    ("plans", "current_revision", "INTEGER NOT NULL DEFAULT 0"),
+    ("plans", "approved_revision", "INTEGER"),
+    ("plans", "review_feedback", "TEXT NOT NULL DEFAULT ''"),
+    ("plans", "execution_run_id", "TEXT NOT NULL DEFAULT ''"),
+    ("run_events", "project_slug", "TEXT NOT NULL DEFAULT 'default'"),
+    ("memory_nodes", "project_slug", "TEXT NOT NULL DEFAULT 'default'"),
+    ("subagent_invocations", "project_slug", "TEXT NOT NULL DEFAULT 'default'"),
+    ("subagent_invocations", "execution_mode", "TEXT NOT NULL DEFAULT 'foreground'"),
+    ("subagent_invocations", "resume_capability", "TEXT NOT NULL DEFAULT 'same_process'"),
+    ("subagent_invocations", "process_instance_id", "TEXT NOT NULL DEFAULT ''"),
+    ("subagent_invocations", "result_ref", "TEXT NOT NULL DEFAULT ''"),
+    ("subagent_invocations", "delivery_status", "TEXT NOT NULL DEFAULT 'none'"),
+    ("scheduled_jobs", "capability_contract", "TEXT NOT NULL DEFAULT '{}'"),
+    ("chat_runs", "updated_at", "TEXT NOT NULL DEFAULT ''"),
+    ("chat_runs", "model_config_json", "TEXT NOT NULL DEFAULT '{}'"),
+    ("chat_runs", "trigger_source", "TEXT NOT NULL DEFAULT 'user'"),
+    ("chat_runs", "scheduled_job_id", "TEXT NOT NULL DEFAULT ''"),
+    ("chat_runs", "scheduled_firing_id", "TEXT NOT NULL DEFAULT ''"),
+    ("chat_sessions", "kind", "TEXT NOT NULL DEFAULT 'chat'"),
+    ("chat_messages", "files", "TEXT NOT NULL DEFAULT '[]'"),
+    ("chat_messages", "clarification_requests", "TEXT NOT NULL DEFAULT '[]'"),
+    ("chat_messages", "clarification_resolved", "INTEGER NOT NULL DEFAULT 0"),
+    ("scheduled_jobs", "model_config_id", "TEXT NOT NULL DEFAULT ''"),
+    ("scheduled_jobs", "required_skills_json", "TEXT NOT NULL DEFAULT '[]'"),
+    ("scheduled_jobs", "context_policy", "TEXT NOT NULL DEFAULT 'fresh'"),
+    ("group_studios", "model_config_id", "TEXT NOT NULL DEFAULT ''"),
+    ("group_work_items", "review_status", "TEXT NOT NULL DEFAULT ''"),
+    ("group_work_items", "review_note", "TEXT NOT NULL DEFAULT ''"),
+    ("group_work_items", "rework_count", "INTEGER NOT NULL DEFAULT 0"),
+    ("trace_observations", "payload_path", "TEXT NOT NULL DEFAULT ''"),
+    ("trace_observations", "payload_sha256", "TEXT NOT NULL DEFAULT ''"),
+)
+
+META_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS schema_version (
+    version INTEGER PRIMARY KEY,
+    applied_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS state_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+"""
+
+
+def reconcile_columns(conn: sqlite3.Connection) -> None:
+    """按 SCHEMA_COLUMNS 幂等补列。表还不存在时跳过。"""
+
+    for table, column, definition in SCHEMA_COLUMNS:
+        found = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table,),
+        ).fetchone()
+        if found is None:
+            continue
+        names = {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in names:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 BASE_SCHEMA_SQL = """
-    CREATE TABLE IF NOT EXISTS workspaces (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        description TEXT NOT NULL DEFAULT '',
+    CREATE TABLE IF NOT EXISTS projects (
+        slug TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        primary_path TEXT NOT NULL,
+        color TEXT,
+        icon TEXT,
         status TEXT NOT NULL DEFAULT 'active',
         created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        archived_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS project_folders (
+        project_slug TEXT NOT NULL,
+        path TEXT NOT NULL,
+        access_mode TEXT NOT NULL,
+        is_primary INTEGER NOT NULL DEFAULT 0,
+        device_id TEXT,
+        inode TEXT,
+        granted_at TEXT,
+        PRIMARY KEY (project_slug, path),
+        FOREIGN KEY(project_slug) REFERENCES projects(slug) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS skill_overrides (
+        skill_id TEXT PRIMARY KEY,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        available_to_all_agents INTEGER NOT NULL DEFAULT 1,
+        installed INTEGER NOT NULL DEFAULT 1,
         updated_at TEXT NOT NULL
     );
-    CREATE TABLE IF NOT EXISTS projects (
-        id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        description TEXT NOT NULL DEFAULT '',
-        root_path TEXT NOT NULL,
-        instructions_file TEXT NOT NULL DEFAULT '',
-        status TEXT NOT NULL DEFAULT 'active',
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY(workspace_id) REFERENCES workspaces(id)
-    );
-    CREATE INDEX IF NOT EXISTS idx_projects_workspace_status
-        ON projects(workspace_id, status, updated_at DESC);
-    CREATE TABLE IF NOT EXISTS project_resource_bindings (
-        project_id TEXT NOT NULL,
-        resource_type TEXT NOT NULL,
-        resource_id TEXT NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        config_override TEXT NOT NULL DEFAULT '{}',
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY(project_id, resource_type, resource_id),
-        FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
-    );
-    CREATE INDEX IF NOT EXISTS idx_project_resource_bindings_project
-        ON project_resource_bindings(project_id, resource_type, enabled);
     CREATE TABLE IF NOT EXISTS agents (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -103,7 +265,9 @@ BASE_SCHEMA_SQL = """
         kind TEXT NOT NULL DEFAULT 'chat',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        message_count INTEGER NOT NULL DEFAULT 0
+        message_count INTEGER NOT NULL DEFAULT 0,
+        project_slug TEXT NOT NULL DEFAULT 'default',
+        cwd TEXT NOT NULL DEFAULT ''
     );
     CREATE TABLE IF NOT EXISTS chat_messages (
         id TEXT PRIMARY KEY,
@@ -207,8 +371,7 @@ BASE_SCHEMA_SQL = """
         id TEXT PRIMARY KEY,
         run_id TEXT NOT NULL,
         session_id TEXT NOT NULL DEFAULT '',
-        workspace_id TEXT NOT NULL DEFAULT 'default',
-        project_id TEXT NOT NULL DEFAULT 'default',
+        project_slug TEXT NOT NULL DEFAULT 'default',
         kind TEXT NOT NULL,
         name TEXT NOT NULL DEFAULT '',
         parent_id TEXT,
@@ -218,12 +381,14 @@ BASE_SCHEMA_SQL = """
         duration_ms INTEGER,
         input_json TEXT NOT NULL DEFAULT '{}',
         output_json TEXT NOT NULL DEFAULT '{}',
-        metadata_json TEXT NOT NULL DEFAULT '{}'
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        payload_path TEXT NOT NULL DEFAULT '',
+        payload_sha256 TEXT NOT NULL DEFAULT ''
     );
     CREATE INDEX IF NOT EXISTS idx_trace_observations_run_started
         ON trace_observations(run_id, started_at);
     CREATE INDEX IF NOT EXISTS idx_trace_observations_project_started
-        ON trace_observations(project_id, started_at DESC);
+        ON trace_observations(project_slug, started_at DESC);
     CREATE TABLE IF NOT EXISTS subagent_invocations (
         id TEXT PRIMARY KEY,
         run_id TEXT NOT NULL,
@@ -275,8 +440,12 @@ BASE_SCHEMA_SQL = """
         scheduled_firing_id TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
         completed_at TEXT,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        project_slug TEXT NOT NULL DEFAULT 'default',
+        cwd TEXT NOT NULL DEFAULT ''
     );
+    CREATE INDEX IF NOT EXISTS idx_chat_runs_project
+        ON chat_runs(project_slug, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_chat_runs_updated
         ON chat_runs(updated_at DESC);
     CREATE TABLE IF NOT EXISTS chat_domain_streams (
@@ -438,8 +607,7 @@ BASE_SCHEMA_SQL = """
         resolution TEXT NOT NULL DEFAULT '',
         agent_id TEXT NOT NULL DEFAULT '',
         agent_name TEXT NOT NULL DEFAULT '',
-        workspace_id TEXT NOT NULL DEFAULT 'default',
-        project_id TEXT NOT NULL DEFAULT 'default',
+        project_slug TEXT NOT NULL DEFAULT 'default',
         source_session_id TEXT NOT NULL DEFAULT '',
         source_run_id TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
@@ -458,8 +626,7 @@ BASE_SCHEMA_SQL = """
     );
     CREATE TABLE IF NOT EXISTS memory_nodes (
         id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL DEFAULT 'default',
-        project_id TEXT NOT NULL DEFAULT 'default',
+        project_slug TEXT NOT NULL DEFAULT 'default',
         agent_id TEXT NOT NULL,
         user_id TEXT NOT NULL DEFAULT 'default',
         node_date TEXT NOT NULL,
@@ -487,7 +654,7 @@ BASE_SCHEMA_SQL = """
         use_count INTEGER NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS idx_memory_nodes_scope_date
-        ON memory_nodes(workspace_id, project_id, agent_id, node_date DESC);
+        ON memory_nodes(project_slug, agent_id, node_date DESC);
     CREATE INDEX IF NOT EXISTS idx_memory_nodes_status_date
         ON memory_nodes(status, node_date DESC);
     CREATE INDEX IF NOT EXISTS idx_memory_nodes_source_run
@@ -508,48 +675,10 @@ BASE_SCHEMA_SQL = """
         ON memory_retrieval_feedback(node_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_memory_retrieval_feedback_created
         ON memory_retrieval_feedback(created_at DESC);
-    CREATE TABLE IF NOT EXISTS skill_evolution_records (
-        id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL DEFAULT 'default',
-        project_id TEXT NOT NULL DEFAULT 'default',
-        agent_id TEXT NOT NULL,
-        agent_name TEXT NOT NULL DEFAULT '',
-        team_id TEXT NOT NULL DEFAULT '',
-        user_id TEXT NOT NULL DEFAULT 'default',
-        source_session_id TEXT NOT NULL DEFAULT '',
-        source_run_id TEXT NOT NULL DEFAULT '',
-        source_message_id TEXT NOT NULL DEFAULT '',
-        router_gate TEXT NOT NULL DEFAULT '{}',
-        workflow_evidence TEXT NOT NULL DEFAULT '{}',
-        reusable INTEGER NOT NULL DEFAULT 0,
-        reusable_reason TEXT NOT NULL DEFAULT '',
-        trigger_description TEXT NOT NULL DEFAULT '',
-        inputs_schema TEXT NOT NULL DEFAULT '{}',
-        draft_skill_name TEXT NOT NULL DEFAULT '',
-        draft_skill_description TEXT NOT NULL DEFAULT '',
-        draft_skill_content TEXT NOT NULL DEFAULT '',
-        draft_tags TEXT NOT NULL DEFAULT '[]',
-        granularity TEXT NOT NULL DEFAULT '',
-        requires_workflow INTEGER NOT NULL DEFAULT 0,
-        suggested_split TEXT NOT NULL DEFAULT '[]',
-        variable_flow TEXT NOT NULL DEFAULT '[]',
-        risk_notes TEXT NOT NULL DEFAULT '',
-        confidence REAL NOT NULL DEFAULT 0,
-        status TEXT NOT NULL DEFAULT 'skipped',
-        registered_skill_id TEXT NOT NULL DEFAULT '',
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_skill_evolution_records_status_updated
-        ON skill_evolution_records(status, updated_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_skill_evolution_records_source
-        ON skill_evolution_records(source_session_id, source_run_id, source_message_id);
-    CREATE INDEX IF NOT EXISTS idx_skill_evolution_records_agent
-        ON skill_evolution_records(agent_id, updated_at DESC);
     CREATE TABLE IF NOT EXISTS scheduled_jobs (
         id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL,
-        project_id TEXT NOT NULL,
+        project_slug TEXT NOT NULL,
+        cwd TEXT NOT NULL DEFAULT '',
         name TEXT NOT NULL,
         summary TEXT NOT NULL DEFAULT '',
         status TEXT NOT NULL,
@@ -563,6 +692,8 @@ BASE_SCHEMA_SQL = """
         last_run_at TEXT,
         frozen_prompt TEXT NOT NULL,
         skill_ids TEXT NOT NULL DEFAULT '[]',
+        required_skills_json TEXT NOT NULL DEFAULT '[]',
+        context_policy TEXT NOT NULL DEFAULT 'fresh',
         tool_scope TEXT NOT NULL DEFAULT '{"allow_bash":false,"allow_http":false,"allow_web":false,"allow_mcp":false,"allow_knowledge":false}',
         capability_contract TEXT NOT NULL DEFAULT '{}',
         input_spec TEXT NOT NULL DEFAULT '{}',
@@ -585,17 +716,16 @@ BASE_SCHEMA_SQL = """
         archived_at TEXT,
         model_config_id TEXT NOT NULL DEFAULT '',
         execution_policy TEXT NOT NULL DEFAULT '{}',
-        UNIQUE (project_id, name)
+        UNIQUE (project_slug, name)
     );
     CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_due
         ON scheduled_jobs(status, next_run_at);
     CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_project
-        ON scheduled_jobs(project_id, status, updated_at DESC);
+        ON scheduled_jobs(project_slug, status, updated_at DESC);
     CREATE TABLE IF NOT EXISTS scheduled_job_runs (
         id TEXT PRIMARY KEY,
         job_id TEXT NOT NULL,
-        workspace_id TEXT NOT NULL,
-        project_id TEXT NOT NULL,
+        project_slug TEXT NOT NULL,
         trigger TEXT NOT NULL,
         scheduled_for TEXT NOT NULL,
         status TEXT NOT NULL,
@@ -616,24 +746,9 @@ BASE_SCHEMA_SQL = """
         ON scheduled_job_runs(job_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_status
         ON scheduled_job_runs(status, updated_at);
-    CREATE TABLE IF NOT EXISTS project_job_recipients (
-        id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL,
-        project_id TEXT NOT NULL,
-        display_name TEXT NOT NULL DEFAULT '',
-        channel TEXT NOT NULL,
-        address TEXT NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        UNIQUE (project_id, channel, address)
-    );
-    CREATE INDEX IF NOT EXISTS idx_project_job_recipients_project
-        ON project_job_recipients(project_id, enabled);
     CREATE TABLE IF NOT EXISTS user_notifications (
         id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL,
-        project_id TEXT NOT NULL DEFAULT '',
+        project_slug TEXT NOT NULL DEFAULT '',
         job_id TEXT NOT NULL DEFAULT '',
         firing_id TEXT NOT NULL DEFAULT '',
         kind TEXT NOT NULL,
@@ -644,13 +759,12 @@ BASE_SCHEMA_SQL = """
         created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_user_notifications_project_created
-        ON user_notifications(project_id, created_at DESC);
+        ON user_notifications(project_slug, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_user_notifications_unread
-        ON user_notifications(project_id, read_at, created_at DESC);
+        ON user_notifications(project_slug, read_at, created_at DESC);
     CREATE TABLE IF NOT EXISTS group_studios (
         id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL,
-        project_id TEXT NOT NULL,
+        project_slug TEXT NOT NULL,
         chat_session_id TEXT NOT NULL,
         title TEXT NOT NULL,
         status TEXT NOT NULL,
@@ -669,7 +783,7 @@ BASE_SCHEMA_SQL = """
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         archived_at TEXT,
-        FOREIGN KEY(project_id) REFERENCES projects(id)
+        FOREIGN KEY(project_slug) REFERENCES projects(slug)
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_group_studios_active_chat
         ON group_studios(chat_session_id)

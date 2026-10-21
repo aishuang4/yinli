@@ -33,14 +33,12 @@ from src.server.routes.chat.models import ChatSession, ChatStore
 from src.storage import database
 from src.storage.database import (
     DEFAULT_PROJECT_ID,
-    DEFAULT_WORKSPACE_ID,
     ensure_db,
     get_chat_run,
     list_user_notifications,
     replace_skills,
     upsert_agent,
     upsert_chat_run,
-    upsert_project_resource_binding,
 )
 from src.storage.database_schema import BASE_SCHEMA_SQL
 
@@ -65,7 +63,6 @@ def _ensure_agent(agent_id: str) -> None:
         "id": agent_id,
         "name": agent_id,
         "system_prompt": "prompt",
-        "workspaceId": DEFAULT_WORKSPACE_ID,
         "status": "idle",
     })
 
@@ -80,21 +77,13 @@ def _ensure_skill(skill_id: str) -> None:
             "status": "installed",
             "enabled": True,
             "updatedAt": "2026-08-20T00:00:00+00:00",
-            "workspaceId": DEFAULT_WORKSPACE_ID,
         },
-    })
-    upsert_project_resource_binding({
-        "project_id": DEFAULT_PROJECT_ID,
-        "resource_type": "skill",
-        "resource_id": skill_id,
-        "enabled": True,
     })
 
 
 def _weekly_job(service: ScheduledJobService, **overrides) -> object:
     payload = {
-        "workspace_id": DEFAULT_WORKSPACE_ID,
-        "project_id": DEFAULT_PROJECT_ID,
+        "project_slug": DEFAULT_PROJECT_ID,
         "name": "周五周报",
         "agent_id": "agent-1",
         "schedule_kind": "weekly",
@@ -121,8 +110,8 @@ def test_default_job_tool_scope_is_all_false_not_runtime_tool_scope():
 def test_job_model_rejects_draft_and_retry_once():
     base = {
         "id": "job-1",
-        "workspace_id": "default",
-        "project_id": "default",
+        "project_slug": "default",
+        "cwd": "",
         "name": "x",
         "status": "pending_confirmation",
         "agent_id": "a",
@@ -145,8 +134,8 @@ def test_firing_status_includes_queued():
     firing = ScheduledJobRun.model_validate({
         "id": "firing-1",
         "job_id": "job-1",
-        "workspace_id": "default",
-        "project_id": "default",
+        "project_slug": "default",
+        "cwd": "",
         "trigger": "schedule",
         "scheduled_for": "2026-08-21T10:00:00+00:00",
         "status": "queued",
@@ -259,8 +248,7 @@ def test_script_job_daily_confirm_skips_agent(isolated_db):
     service = _service()
     with pytest.raises(ScheduledJobValidationError, match="不能同时填写"):
         service.create_job(
-            workspace_id=DEFAULT_WORKSPACE_ID,
-            project_id=DEFAULT_PROJECT_ID,
+            project_slug=DEFAULT_PROJECT_ID,
             name="混用脚本",
             agent_id="agent-1",
             schedule_kind="daily",
@@ -272,8 +260,7 @@ def test_script_job_daily_confirm_skips_agent(isolated_db):
             script_source="print('x')\n",
         )
     job = service.create_job(
-        workspace_id=DEFAULT_WORKSPACE_ID,
-        project_id=DEFAULT_PROJECT_ID,
+        project_slug=DEFAULT_PROJECT_ID,
         name="每天脚本",
         agent_id="",
         schedule_kind="daily",
@@ -320,7 +307,8 @@ def test_create_job_writes_pending_confirmation_and_all_false_tool_scope(isolate
     job = _weekly_job(service)
     assert job.status == "pending_confirmation"
     assert job.status != "draft"
-    assert job.project_id == DEFAULT_PROJECT_ID
+    assert job.project_slug == DEFAULT_PROJECT_ID
+    assert job.cwd
     assert job.mode == "agent"
     assert job.tool_scope.model_dump() == DEFAULT_JOB_TOOL_SCOPE
     assert job.next_run_at is None
@@ -382,8 +370,7 @@ def test_create_job_rejects_missing_agent_even_when_gate_off(isolated_db):
     service = _service()
     with pytest.raises(ScheduledJobValidationError, match="找不到要执行定时任务的 Agent"):
         service.create_job(
-            workspace_id=DEFAULT_WORKSPACE_ID,
-            project_id=DEFAULT_PROJECT_ID,
+            project_slug=DEFAULT_PROJECT_ID,
             name="幽灵执行者",
             agent_id="agent-does-not-exist",
             schedule_kind="weekly",
@@ -487,7 +474,7 @@ def test_finalize_job_clock_weekly_advances_from_scheduled_for(isolated_db):
         status="queued",
     )
     assert firing.status == "queued"
-    assert firing.project_id == DEFAULT_PROJECT_ID
+    assert firing.project_slug == DEFAULT_PROJECT_ID
     updated = service.complete_firing(firing.id, "succeeded")
     assert updated.status == "active"
     assert updated.next_run_at == "2026-08-28T10:00:00+00:00"
@@ -533,8 +520,7 @@ def test_finalize_job_clock_weekly_notify_keep_schedule_stays_active(isolated_db
 def test_finalize_job_clock_once_success_and_failure(isolated_db):
     service = _service()
     success = service.create_job(
-        workspace_id=DEFAULT_WORKSPACE_ID,
-        project_id=DEFAULT_PROJECT_ID,
+        project_slug=DEFAULT_PROJECT_ID,
         name="一次性成功",
         agent_id="agent-1",
         schedule_kind="once",
@@ -554,8 +540,7 @@ def test_finalize_job_clock_once_success_and_failure(isolated_db):
     assert completed.next_run_at is None
 
     failed = service.create_job(
-        workspace_id=DEFAULT_WORKSPACE_ID,
-        project_id=DEFAULT_PROJECT_ID,
+        project_slug=DEFAULT_PROJECT_ID,
         name="一次性失败",
         agent_id="agent-1",
         schedule_kind="once",
@@ -669,20 +654,20 @@ def test_list_jobs_skips_corrupt_row(isolated_db):
         conn.execute(
             """
             INSERT INTO scheduled_jobs (
-                id, workspace_id, project_id, name, status, agent_id,
+                id, project_slug, cwd, name, status, agent_id,
                 schedule_kind, schedule_expr, timezone, frozen_prompt,
                 missed_policy, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                "job-corrupt", DEFAULT_WORKSPACE_ID, DEFAULT_PROJECT_ID,
+                "job-corrupt", DEFAULT_PROJECT_ID, "",
                 "损坏任务", "pending_confirmation", "agent-1",
                 "weekly", '{"weekdays":["fri"],"at":"18:00"}', "Asia/Shanghai",
                 "prompt", "not-a-policy", now, now,
             ),
         )
         conn.commit()
-    listed = service.list_jobs(project_id=DEFAULT_PROJECT_ID)
+    listed = service.list_jobs(project_slug=DEFAULT_PROJECT_ID)
     assert [item.id for item in listed] == [valid.id]
 
 
@@ -700,7 +685,7 @@ def test_pause_for_resource_change_pauses_matching_active_jobs(isolated_db):
     )
     paused = service.pause_for_resource_change(
         "skill_unbound",
-        project_id=DEFAULT_PROJECT_ID,
+        project_slug=DEFAULT_PROJECT_ID,
         skill_id="skill-report",
     )
     assert [item.id for item in paused] == [job.id]
@@ -710,7 +695,7 @@ def test_pause_for_resource_change_pauses_matching_active_jobs(isolated_db):
 
     by_agent = service.pause_for_resource_change("agent_missing", agent_id="agent-2")
     assert [item.id for item in by_agent] == [other.id]
-    notes = list_user_notifications(project_id=DEFAULT_PROJECT_ID)
+    notes = list_user_notifications(project_slug=DEFAULT_PROJECT_ID)
     paused_notes = [item for item in notes if item["kind"] == "job_paused"]
     assert {item["job_id"] for item in paused_notes} == {job.id, other.id}
 
@@ -723,7 +708,7 @@ def test_user_pause_does_not_write_notification(isolated_db):
     )
     paused = service.pause(job.id)
     assert paused.status == "paused"
-    assert list_user_notifications(project_id=DEFAULT_PROJECT_ID) == []
+    assert list_user_notifications(project_slug=DEFAULT_PROJECT_ID) == []
 
 
 def test_cancelled_firing_is_not_a_failure_notification(isolated_db):
@@ -741,7 +726,7 @@ def test_cancelled_firing_is_not_a_failure_notification(isolated_db):
     assert updated.status == "active"
     assert updated.consecutive_failures == 0
     assert updated.pause_reason == ""
-    assert list_user_notifications(project_id=DEFAULT_PROJECT_ID) == []
+    assert list_user_notifications(project_slug=DEFAULT_PROJECT_ID) == []
 
 
 def test_firing_notification_title_allows_braces_in_job_name(isolated_db):
@@ -756,7 +741,7 @@ def test_firing_notification_title_allows_braces_in_job_name(isolated_db):
         trigger="schedule",
     )
     service.complete_firing(firing.id, "succeeded")
-    notes = list_user_notifications(project_id=DEFAULT_PROJECT_ID)
+    notes = list_user_notifications(project_slug=DEFAULT_PROJECT_ID)
     completed = [item for item in notes if item["kind"] == "job_completed"]
     assert len(completed) == 1
     assert completed[0]["title"] == "周报 {draft 已完成"
@@ -769,13 +754,13 @@ def test_sql_tool_scope_default_is_all_false(isolated_db):
         conn.execute(
             """
             INSERT INTO scheduled_jobs (
-                id, workspace_id, project_id, name, status, agent_id,
+                id, project_slug, cwd, name, status, agent_id,
                 schedule_kind, schedule_expr, timezone, frozen_prompt,
                 created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                "job-sql-default", DEFAULT_WORKSPACE_ID, DEFAULT_PROJECT_ID,
+                "job-sql-default", DEFAULT_PROJECT_ID, "",
                 "SQL默认", "pending_confirmation", "agent-1",
                 "weekly", '{"weekdays":["fri"],"at":"18:00"}', "Asia/Shanghai",
                 "prompt", now, now,
@@ -803,7 +788,6 @@ def test_schema_tables_and_unique_indexes_exist(isolated_db):
         assert {
             "scheduled_jobs",
             "scheduled_job_runs",
-            "project_job_recipients",
             "user_notifications",
         }.issubset(tables)
         session_cols = {
@@ -831,8 +815,7 @@ def test_chat_session_kind_survives_insert(isolated_db):
         "agent_id": "agent-1",
         "agent_name": "助手",
         "mode": "agent",
-        "workspace_id": DEFAULT_WORKSPACE_ID,
-        "project_id": DEFAULT_PROJECT_ID,
+        "project_slug": DEFAULT_PROJECT_ID,
         "kind": "scheduled_job",
         "created_at": "2026-08-21T00:00:00+00:00",
         "updated_at": "2026-08-21T00:00:00+00:00",
@@ -854,8 +837,7 @@ def test_session_without_extra_columns_stays_in_chat_history(isolated_db):
         "agent_id": "agent-1",
         "agent_name": "助手",
         "mode": "agent",
-        "workspace_id": DEFAULT_WORKSPACE_ID,
-        "project_id": DEFAULT_PROJECT_ID,
+        "project_slug": DEFAULT_PROJECT_ID,
         "kind": "chat",
         "created_at": "2026-08-21T00:00:00+00:00",
         "updated_at": "2026-08-21T00:00:00+00:00",

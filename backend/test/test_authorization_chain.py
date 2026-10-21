@@ -29,7 +29,7 @@ def test_child_inherits_mode_and_cannot_widen_parent_ceiling(tmp_path):
     outside = tmp_path / "outside"
     outside.mkdir()
     parent = RunAuthorization(
-        tenantId="local", workspaceId="w", projectId="p", sessionId="s",
+        tenantId="local", projectSlug="p", sessionId="s",
         runId="run-parent", actorId="leader", approvalMode="model_review",
         capabilityVersion="cap-parent", surface="interactive",
     )
@@ -81,7 +81,7 @@ def test_finished_run_permission_cannot_authorize_the_next_job_run():
     first = action_for(approvalMode="full_access")
     second_owner = first.authorization.model_copy(update={"run_id": "run-next", "actor_id": "job"})
     database.upsert_chat_run({
-        "id": second_owner.run_id, "workspaceId": "w", "projectId": "p", "sessionId": "s", "status": "running",
+        "id": second_owner.run_id, "projectSlug": "p", "sessionId": "s", "status": "running",
     })
     allowed = AuthorizationDecision(
         id=f"pd_{uuid4().hex}", actionFingerprint=first.fingerprint,
@@ -103,12 +103,12 @@ def test_manual_rerun_creates_a_new_firing(isolated_db):
     ensure_db()
     upsert_agent({
         "id": "agent-1", "name": "agent-1", "system_prompt": "prompt",
-        "workspaceId": DEFAULT_WORKSPACE_ID, "status": "idle",
+         "status": "idle",
     })
     service = ScheduledJobService()
     job = service.create_job(
-        workspace_id=DEFAULT_WORKSPACE_ID,
-        project_id=DEFAULT_PROJECT_ID,
+        
+        project_slug=DEFAULT_PROJECT_ID,
         name="重新运行",
         agent_id="agent-1",
         schedule_kind="weekly",
@@ -147,13 +147,13 @@ async def test_readonly_tool_uses_one_execution_function_in_every_mode(tmp_path,
     for mode in ("manual", "model_review", "full_access"):
         run_id = f"read-{mode}"
         database.upsert_chat_run({
-            "id": run_id, "workspaceId": "w", "projectId": "p", "sessionId": "s", "status": "running",
+            "id": run_id, "projectSlug": "p", "sessionId": "s", "status": "running",
             "authorization": {
                 "schemaVersion": 1, "tenantId": "local", "approvalMode": mode, "reviewerConfigVersion": "",
             },
         })
         owner = RunAuthorization(
-            tenantId="local", workspaceId="w", projectId="p", sessionId="s",
+            tenantId="local", projectSlug="p", sessionId="s",
             runId=run_id, actorId="reader", approvalMode=mode, capabilityVersion="cap-read",
         )
         holder: dict = {}

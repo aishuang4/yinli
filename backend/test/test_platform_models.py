@@ -86,7 +86,7 @@ def test_desktop_platform_model_enters_normal_run(monkeypatch):
 
     async def run() -> None:
         with pytest.raises(HTTPException) as missing:
-            await start_chat_run(ChatMessage(message="hi", modelConfigId="platform:demo", session_id="local-1"))
+            await start_chat_run(ChatMessage(message="hi", modelConfigId="platform:demo", session_id="local-1", project_slug="default"))
         assert missing.value.status_code == 422
         assert "登录引力云端" in missing.value.detail
 
@@ -98,11 +98,11 @@ def test_desktop_platform_model_enters_normal_run(monkeypatch):
 
         monkeypatch.setattr("src.server.routes.chat.handlers.send.resolve_model_binding", resolve)
         with pytest.raises(HTTPException) as local_error:
-            await start_chat_run(ChatMessage(message="本地", modelConfigId="deepseek-v4-flash", session_id="local-2"))
+            await start_chat_run(ChatMessage(message="本地", modelConfigId="deepseek-v4-flash", session_id="local-2", project_slug="default"))
         assert local_error.value.status_code == 422
         assert seen == ["deepseek-v4-flash"]
         with pytest.raises(HTTPException):
-            await start_chat_run(ChatMessage(message="平台", modelConfigId="platform:demo", session_id="local-3"))
+            await start_chat_run(ChatMessage(message="平台", modelConfigId="platform:demo", session_id="local-3", project_slug="default"))
         assert seen[-1] == "platform:demo"
 
     asyncio.run(run())

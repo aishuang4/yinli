@@ -18,6 +18,15 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _owner_project_slug(owner: RunAuthorization) -> str:
+    """讀取授權歸屬的專案身份。模型改為 project_slug 後直接取該欄。"""
+
+    slug = getattr(owner, "project_slug", None)
+    if slug:
+        return str(slug)
+    return str(getattr(owner, "project_id", "") or "")
+
+
 def project_permission_fact(
     *,
     verdict: str,
@@ -83,7 +92,7 @@ class PermissionRecordStore:
         """按当前租户汇总一次 Run 的真实执行事实，供 completion/Trace 共用。"""
 
         self._check_owner(RunAuthorization(
-            tenantId=current_tenant().tenant_id, workspaceId="summary", projectId="summary",
+            tenantId=current_tenant().tenant_id, project_slug="summary",
             sessionId="summary", runId=run_id, actorId="summary", capabilityVersion="summary",
         ))
         with _transaction() as conn:
@@ -133,8 +142,8 @@ class PermissionRecordStore:
         row = conn.execute("SELECT * FROM chat_runs WHERE id=?", (owner.run_id,)).fetchone()
         if row is None:
             return "授权 Run 不存在"
-        if (row["workspace_id"], row["project_id"], row["session_id"]) != (
-            owner.workspace_id, owner.project_id, owner.session_id,
+        if (row["project_slug"], row["session_id"]) != (
+            _owner_project_slug(owner), owner.session_id,
         ):
             return "授权 Run 归属不匹配"
         frozen = json.loads(row["authorization_json"] or "{}")
@@ -265,11 +274,11 @@ class PermissionRecordStore:
                 raise ValueError(error)
             conn.execute(
                 """INSERT INTO permission_decisions
-                   (id,tenant_id,workspace_id,project_id,session_id,run_id,actor_id,call_id,
+                   (id,tenant_id,project_slug,session_id,run_id,actor_id,call_id,
                     action_fingerprint,snapshot_json,decision_json,approval_mode,policy_version,created_at,updated_at,expires_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(tenant_id,run_id,actor_id,call_id,action_fingerprint) DO NOTHING""",
-                (decision.id, owner.tenant_id, owner.workspace_id, owner.project_id, owner.session_id,
+                (decision.id, owner.tenant_id, _owner_project_slug(owner), owner.session_id,
                  owner.run_id, owner.actor_id, action.call_id, action.fingerprint,
                  action.model_dump_json(by_alias=True), decision.model_dump_json(by_alias=True),
                  owner.approval_mode, owner.policy_version, now, now, expires),
@@ -352,11 +361,11 @@ class PermissionRecordStore:
         owner = action.authorization
         conn.execute(
             """INSERT INTO permission_decisions
-               (id,tenant_id,workspace_id,project_id,session_id,run_id,actor_id,call_id,
+               (id,tenant_id,project_slug,session_id,run_id,actor_id,call_id,
                 action_fingerprint,snapshot_json,decision_json,approval_mode,policy_version,
                 created_at,updated_at,expires_at,related_decision_id)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (decision.id, owner.tenant_id, owner.workspace_id, owner.project_id, owner.session_id,
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (decision.id, owner.tenant_id, _owner_project_slug(owner), owner.session_id,
              owner.run_id, owner.actor_id, call_id or action.call_id, action.fingerprint,
              action.model_dump_json(by_alias=True), decision.model_dump_json(by_alias=True),
              owner.approval_mode, owner.policy_version, now, now, expires, related),
@@ -515,8 +524,8 @@ class PermissionRecordStore:
         now = _now()
         with _transaction() as conn:
             run = conn.execute("SELECT * FROM chat_runs WHERE id=?", (owner.run_id,)).fetchone()
-            if run is None or (run["workspace_id"], run["project_id"], run["session_id"]) != (
-                owner.workspace_id, owner.project_id, owner.session_id,
+            if run is None or (run["project_slug"], run["session_id"]) != (
+                _owner_project_slug(owner), owner.session_id,
             ):
                 raise ValueError("取消 Run 归属不匹配")
             conn.execute("""UPDATE chat_runs SET authorization_invalidated_at=?,updated_at=?
@@ -532,10 +541,10 @@ class PermissionRecordStore:
                              WHERE decision_id IN ({query}) AND status IN ('reserved','running')""",
                          (now, *params))
 
-    def invalidate_run_record(self, run_id: str, *, workspace_id: str, project_id: str,
+    def invalidate_run_record(self, run_id: str, *, project_slug: str,
                               session_id: str, interrupted: bool = False) -> None:
         """收口属于当前租户的整个 Run，无需恢复已丢失的 actor 现场。"""
         tenant = current_tenant()
-        owner = RunAuthorization(tenantId=tenant.tenant_id, workspaceId=workspace_id, projectId=project_id,
+        owner = RunAuthorization(tenantId=tenant.tenant_id, project_slug=project_slug,
                                  sessionId=session_id, runId=run_id, actorId="run-lifecycle", capabilityVersion="lifecycle")
         self.invalidate_run(owner, interrupted=interrupted)

@@ -18,8 +18,8 @@ class InAppNotificationChannel(NotificationChannel):
 
     def deliver(self, message: NotificationMessage) -> ChannelDeliveryResult:
         record = insert_user_notification({
-            "workspace_id": message.workspace_id,
-            "project_id": message.project_id,
+            "tenant_id": message.tenant_id,
+            "project_slug": message.project_slug,
             "job_id": message.job_id,
             "firing_id": message.firing_id,
             "kind": message.kind,
@@ -27,11 +27,11 @@ class InAppNotificationChannel(NotificationChannel):
             "body": message.body,
             "payload": dict(message.payload),
         })
-        project_id = str(record.get("project_id") or "") or None
+        project_slug = str(record.get("project_slug") or record.get("projectSlug") or message.project_slug or "") or None
         notification_hub.publish({
             "type": "notification",
-            "projectId": record.get("project_id") or "",
-            "unreadCount": unread_count(project_id=project_id),
+            "projectSlug": project_slug or "",
+            "unreadCount": unread_count(project_slug=project_slug),
             "notification": serialize_notification(record),
         })
         return ChannelDeliveryResult(

@@ -1,10 +1,9 @@
 /** Chat 发送框 / 菜单：常见指令 + Skill。 */
 
 import { useEffect, useRef } from 'react';
-import { BookOpen, ListChecks, Minimize2, Sparkles, Users, UserRound, X } from 'lucide-react';
+import { ListChecks, Minimize2, Sparkles, Users, UserRound } from 'lucide-react';
 import type { Skill } from '../../types/skill';
-import { MAX_FORCED_SKILLS } from './forcedSkills';
-import { COMPOSER_STATUS_CHIP_CLASS } from './plusMenu';
+import { MAX_FORCED_SKILLS, skillTextSegments } from './forcedSkills';
 import type { ComposerSlashCommand, SlashListItem } from './slashCommands';
 
 type ScrollBox = {
@@ -77,7 +76,7 @@ export function ChatSkillSlashMenu({
       aria-label="选择斜杠指令或 Skill"
     >
       <div className="px-3 pb-1 pt-2 text-xs text-[var(--color-text-tertiary)]">
-        输入 / 选择指令或 Skill。Skill 最多 {MAX_FORCED_SKILLS} 个。
+        输入 / 选择指令或 Skill。选中的 Skill 留在消息里高亮，最多 {MAX_FORCED_SKILLS} 个。
       </div>
       <div ref={listRef} className="max-h-64 overflow-y-auto py-1">
         {loading && items.length === 0 ? (
@@ -159,40 +158,11 @@ export function ChatSkillSlashMenu({
   );
 }
 
-export function ChatForcedSkillChips({
-  skills,
-  selectedIds,
-  disabled,
-  onRemove,
-}: {
-  skills: Skill[];
-  selectedIds: string[];
-  disabled?: boolean;
-  onRemove: (skillId: string) => void;
-}) {
-  const selectedSet = new Set(selectedIds);
-  const selectedSkills = skills.filter((skill) => selectedSet.has(skill.id));
-  if (selectedSkills.length === 0) return null;
-  return (
-    <>
-      {selectedSkills.map((skill) => (
-        <span
-          key={skill.id}
-          className={COMPOSER_STATUS_CHIP_CLASS}
-        >
-          <BookOpen size={12} className="shrink-0" />
-          <span className="truncate">/{skill.name}</span>
-          <button
-            type="button"
-            className="icon-button flex h-4 w-4 items-center justify-center rounded-full text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] disabled:opacity-40"
-            onClick={() => onRemove(skill.id)}
-            disabled={disabled}
-            aria-label={`取消强制开启 ${skill.name}`}
-          >
-            <X size={10} />
-          </button>
-        </span>
-      ))}
-    </>
-  );
+export function SkillHighlightText({ text, skills }: { text: string; skills: Skill[] }) {
+  const segments = skillTextSegments(text, skills);
+  return segments.map((part, index) => (
+    part.skill
+      ? <span key={index} className="chat-skill-token">{part.text}</span>
+      : <span key={index}>{part.text}</span>
+  ));
 }

@@ -53,8 +53,7 @@ class MemoryNodeWrite:
     agent_final_outputs: list[str] = field(default_factory=list)
     conversation_digest: str = ""
     tags: list[str] = field(default_factory=list)
-    workspace_id: str = "default"
-    project_id: str = "default"
+    project_slug: str = "default"
     user_id: str = "default"
     date_range_start: str | None = None
     date_range_end: str | None = None
@@ -83,8 +82,7 @@ class MemoryNodeService:
         node = upsert_memory_node(
             {
                 "id": node_id,
-                "workspace_id": item.workspace_id,
-                "project_id": item.project_id,
+                "project_slug": item.project_slug,
                 "agent_id": item.agent_id,
                 "user_id": item.user_id,
                 "node_date": item.node_date,
@@ -126,8 +124,7 @@ class MemoryNodeService:
         """
 
         existing = find_session_day_memory_node(
-            workspace_id=item.workspace_id,
-            project_id=item.project_id,
+            project_slug=item.project_slug,
             agent_id=item.agent_id,
             node_date=item.node_date,
             source_session_id=item.source_session_id,
@@ -152,8 +149,7 @@ class MemoryNodeService:
             user_inputs=user_inputs,
             agent_final_outputs=outputs,
             tags=tags,
-            workspace_id=item.workspace_id,
-            project_id=item.project_id,
+            project_slug=item.project_slug,
             user_id=item.user_id,
             source=item.source,
             source_session_id=item.source_session_id,
@@ -217,8 +213,7 @@ class MemoryNodeService:
         date_from: str | None = None,
         date_to: str | None = None,
         limit: int = 30,
-        workspace_id: str = "default",
-        project_id: str = "default",
+        project_slug: str = "default",
         user_id: str | None = None,
         status: str | None = "active",
     ) -> dict[str, Any]:
@@ -227,8 +222,7 @@ class MemoryNodeService:
         resolved_to = date_to or date.today().isoformat()
         resolved_from = date_from or _date_days_ago(resolved_to, 29)
         nodes = list_memory_nodes(
-            workspace_id=workspace_id,
-            project_id=project_id,
+            project_slug=project_slug,
             agent_id=agent_id,
             user_id=user_id,
             date_from=resolved_from,
@@ -259,8 +253,7 @@ class MemoryNodeService:
         date_from: str | None = None,
         date_to: str | None = None,
         limit: int = 10,
-        workspace_id: str = "default",
-        project_id: str = "default",
+        project_slug: str = "default",
         user_id: str | None = None,
         status: str | None = "active",
         mark_used: bool = True,
@@ -276,8 +269,7 @@ class MemoryNodeService:
             date_from=date_from,
             date_to=date_to,
             limit=limit,
-            workspace_id=workspace_id,
-            project_id=project_id,
+            project_slug=project_slug,
             user_id=user_id,
             status=status,
         )
@@ -286,8 +278,7 @@ class MemoryNodeService:
             node = get_memory_node(result.id)
             if node and _node_matches_query_filters(
                 node,
-                workspace_id=workspace_id,
-                project_id=project_id,
+                project_slug=project_slug,
                 agent_id=agent_id,
                 user_id=user_id,
                 date_from=date_from,
@@ -299,8 +290,7 @@ class MemoryNodeService:
                 candidate["_retrieval_sources"] = ["vector"]
                 vector_nodes.append(candidate)
         lexical_nodes = search_memory_nodes(
-            workspace_id=workspace_id,
-            project_id=project_id,
+            project_slug=project_slug,
             agent_id=agent_id,
             user_id=user_id,
             date_from=date_from,
@@ -339,16 +329,14 @@ class MemoryNodeService:
         date_from: str | None,
         date_to: str | None,
         limit: int,
-        workspace_id: str,
-        project_id: str,
+        project_slug: str,
         user_id: str | None,
         status: str | None,
     ):
         if not query_text.strip() or status != "active":
             return []
         filters: dict[str, Any] = {
-            "workspace_id": workspace_id,
-            "project_id": project_id,
+            "project_slug": project_slug,
             "status": "active",
         }
         if agent_id:
@@ -372,8 +360,7 @@ class MemoryNodeService:
 def _node_matches_query_filters(
     node: dict[str, Any],
     *,
-    workspace_id: str,
-    project_id: str,
+    project_slug: str,
     agent_id: str | None,
     user_id: str | None,
     date_from: str | None,
@@ -382,7 +369,7 @@ def _node_matches_query_filters(
 ) -> bool:
     """校验向量候选仍满足 SQLite 权威过滤条件。"""
 
-    if node.get("workspace_id") != workspace_id or node.get("project_id") != project_id:
+    if node.get("project_slug") != project_slug:
         return False
     if status is not None and node.get("status") != status:
         return False
@@ -427,8 +414,7 @@ def _collection_config() -> VectorCollectionConfig:
     return VectorCollectionConfig(
         name=MEMORY_NODES_COLLECTION,
         metadata_schema={
-            "workspace_id": "string",
-            "project_id": "string",
+            "project_slug": "string",
             "agent_id": "string",
             "user_id": "string",
             "node_date": "string",
@@ -444,8 +430,7 @@ def _node_to_document(node: dict[str, Any]) -> VectorDocument:
         id=node["id"],
         text=node["search_text"],
         metadata={
-            "workspace_id": node["workspace_id"],
-            "project_id": node["project_id"],
+            "project_slug": node["project_slug"],
             "agent_id": node["agent_id"],
             "user_id": node["user_id"],
             "node_date": node["node_date"],

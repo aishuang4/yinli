@@ -24,8 +24,8 @@ def _session(session_id: str) -> dict:
         "agent_id": "default",
         "agent_name": "助手",
         "mode": "agent",
-        "workspace_id": "default",
-        "project_id": "default",
+        
+        "project_slug": "default",
         "kind": "chat",
         "created_at": "2026-08-21T00:00:00+00:00",
         "updated_at": "2026-08-21T00:00:00+00:00",
@@ -41,27 +41,27 @@ def test_tenant_b_cannot_read_tenant_a_resources(hosted_env):
             "id": "ntf-a",
             "kind": "job_finished",
             "title": "A 的通知",
-            "workspace_id": "default",
-            "project_id": "default",
+            
+            "project_slug": "default",
         })
         database.create_workflow_run({"id": "wf-a", "title": "A 的任务流", "goal": "只有 A"})
         with database._lock, database._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO group_studios (
-                    id, workspace_id, project_id, chat_session_id, title, status,
+                    id, project_slug, chat_session_id, title, status,
                     current_task_card_id, budget_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 'open', 'task-a', '{}', ?, ?)
+                ) VALUES (?, ?, ?, ?, 'open', 'task-a', '{}', ?, ?)
                 """,
                 (
-                    "grp-a", "default", "default", "sess-a", "A 的群",
+                    "grp-a", "default", "sess-a", "A 的群",
                     "2026-08-21T00:00:00+00:00", "2026-08-21T00:00:00+00:00",
                 ),
             )
         set_scheduled_jobs_settings(enabled=True, capability_gate=False)
         ScheduledJobService().create_job(
-            workspace_id="default",
-            project_id="default",
+            
+            project_slug="default",
             name="A 的任务",
             agent_id="system-websearch-job",
             schedule_kind="weekly",

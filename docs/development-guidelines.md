@@ -136,7 +136,7 @@
 - 文件导入统一走 `FileImportButton`；不要在页面里新增隐藏 file input。
 - MCP / Skills 等目录页通用筛选优先复用 `CatalogFilterBar`。
 - 大型页面当前拆分方向：
-  - `MemoryPage` 只保留记忆数据装配和 tab 编排；Markdown、历史记忆、Skill 自进化队列、Wiki Vault 面板放在 `features/memory/`。
+  - `MemoryPage` 只保留记忆数据装配和 tab 编排；习惯、专业区、时间线、Markdown 和历史记忆面板放在 `features/memory/`。
   - `TracePage` 只保留 Run 列表、详情加载和进行中短轮询；墙钟时间线与 Observation 详情放在 `features/traces/`。不接 Chat SSE，不再分页 `run_events`。
   - `AgentEditor` 只保留 Agent 表单状态和保存编排；基础信息、模型高级设置、能力工具、Guardrails 和选择弹窗放在 `features/agents/sections/`。
 - 新页面验收时至少扫描：

@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from src.config.runtime_paths import default_project_root
+from src.config.runtime_paths import project_default_root
 from src.security.permissions import UnifiedPermissionProfile, build_permission_profile
 
 
@@ -29,9 +29,7 @@ class AgentGuardrails:
     filesystem_scope: str = ""
     shell_blacklist: list[str] = field(default_factory=list)
     network_enabled: bool = True
-    human_approval: bool = False
-    tool_permission_mode: str = "accept_edits"
-    tool_permission_profile: str = "confirm_destructive"
+    operation_scope: str = "normal"
     execution_backend: str = "local"
     docker_image: str = "python:3.11-slim"
     persistent_sandbox: bool = False
@@ -39,12 +37,12 @@ class AgentGuardrails:
     permission_profile: UnifiedPermissionProfile = field(default_factory=UnifiedPermissionProfile)
 
     def __post_init__(self) -> None:
-        """兼容旧 guardrails 字段，自动补齐统一权限配置。"""
+        """补齐文件范围，并按能力范围生成权限配置。"""
 
-        filesystem_scope = self.filesystem_scope or str(default_project_root())
+        filesystem_scope = self.filesystem_scope or str(project_default_root())
         expanded_scope = os.path.abspath(os.path.expanduser(filesystem_scope))
         if expanded_scope == os.path.abspath(os.sep):
-            expanded_scope = str(default_project_root())
+            expanded_scope = str(project_default_root())
         object.__setattr__(self, "filesystem_scope", expanded_scope)
 
         profile = self.permission_profile

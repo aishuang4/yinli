@@ -392,7 +392,7 @@ def test_session_day_turns_aggregate_into_one_node(isolated_db):
     assert second["user_inputs"] == ["帮我把 Q3 销售表按地区汇总生成 xlsx 文件", "再把华东的明细单独导出一份 csv"]
     assert "共 2 轮" in second["summary"] and "最近：" in second["summary"]
     assert second["source_run_id"] == "run-2"
-    assert len(database.list_memory_nodes(workspace_id="default", project_id="default")) == 2
+    assert len(database.list_memory_nodes(project_slug="default")) == 2
 
 
 def test_archive_stale_nodes_skips_pinned_and_recently_used(isolated_db):

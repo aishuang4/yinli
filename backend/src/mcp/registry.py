@@ -25,14 +25,8 @@ from src.catalog.mcp_files import McpFileRecord, discover_mcp_files, write_mcp_f
 from src.catalog.migrate_mcp_http import ensure_mcp_file_catalog, is_mcp_catalog_migrated
 from src.catalog.paths import mcp_dir
 from src.catalog.secrets import delete_named_secret, resolve_headers
-from src.config.runtime_paths import data_root
 from src.scheduler.mcp_runtime import resolve_mcp_runtime_servers as _resolve_mcp_runtime_servers
-from src.storage.database import (
-    list_json_records,
-    list_mcp_servers as db_list_mcp_servers,
-    migrate_json_list_file,
-    replace_mcp_servers,
-)
+from src.storage.database import list_mcp_servers as db_list_mcp_servers, replace_mcp_servers
 
 McpTransport = Literal["stdio", "sse", "websocket"]
 McpInstallStatus = Literal["available", "installed", "error"]
@@ -67,9 +61,8 @@ class McpServer(BaseModel):
     enabled: bool = False
     installed_at: Optional[str] = Field(default=None, alias="installedAt")
     updated_at: str = Field(alias="updatedAt")
-    workspace_id: str = Field(default="default", alias="workspaceId")
 
-    model_config = {"populate_by_name": True}
+    model_config = {"populate_by_name": True, "extra": "ignore"}
 
 
 class McpInstallRequest(BaseModel):
@@ -85,12 +78,10 @@ class McpRegisterRequest(BaseModel):
     url: HttpUrl
     description: str = Field(default="", max_length=300)
     headers: dict[str, str] = Field(default_factory=dict)
-    workspace_id: str = Field(default="default", alias="workspaceId")
 
-    model_config = {"populate_by_name": True}
+    model_config = {"populate_by_name": True, "extra": "ignore"}
 
 
-MCP_NAMESPACE = "mcp_servers"
 RESERVED_MCP_HEADERS = {"content-type", "accept"}
 
 
@@ -461,7 +452,6 @@ def _server_from_file(record: McpFileRecord) -> McpServer:
         "status": record.status,
         "enabled": record.enabled,
         "updatedAt": record.updated_at or _utc_now(),
-        "workspaceId": record.workspace_id,
     })
     _mcp_header_refs[record.id] = dict(record.header_refs)
     return server
@@ -482,12 +472,7 @@ def _refresh_mcp_files() -> None:
 
 
 def _load_user_mcp_servers() -> None:
-    migrate_json_list_file(MCP_NAMESPACE, str(data_root() / "mcp_servers.json"))
     records = db_list_mcp_servers()
-    if not records:
-        legacy = list_json_records(MCP_NAMESPACE)
-        replace_mcp_servers({str(item["id"]): item for item in legacy if item.get("id")})
-        records = db_list_mcp_servers()
     for item in records:
         server = McpServer.model_validate(item)
         _mcp_servers[server.id] = server
@@ -515,9 +500,8 @@ def _save_user_mcp_servers() -> None:
                 tools=[tool.model_dump(by_alias=True) for tool in server.tools],
                 status=server.status,
                 enabled=server.enabled,
-                workspace_id=server.workspace_id,
             )
-            write_mcp_file(mcp_dir(server.workspace_id) / f"{server.id}.yaml", record)
+            write_mcp_file(mcp_dir() / f"{server.id}.yaml", record)
             _mcp_header_refs[server.id] = record.header_refs
             _mcp_servers[server.id] = server.model_copy(update={"headers": record.headers})
         return

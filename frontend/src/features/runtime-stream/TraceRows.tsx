@@ -161,7 +161,7 @@ export function LiveTraceLabel({
   spinning?: boolean;
 }) {
   return (
-    <div className="inline-flex max-w-full items-center gap-1.5 px-1 py-0.5 text-[13px] text-[var(--color-text-tertiary)]">
+    <div className="flex w-full max-w-full items-center gap-1.5 px-1 py-0.5 text-[13px] text-[var(--color-text-tertiary)]">
       {icon ? <span className="flex h-4 w-4 shrink-0 items-center justify-center">{icon}</span> : null}
       {spinning ? <Loader2 size={14} className="shrink-0 animate-spin" /> : null}
       <span className="min-w-0 truncate">{label}</span>

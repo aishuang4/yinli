@@ -31,8 +31,8 @@ def persist_user_message_and_trace(ctx: ChatRunContext, run_data) -> None:
         content=display_content,
         images=run_data.images,
         files=run_data.files,
-        workspace_id=ctx.runtime_context.workspace_id,
-        project_id=ctx.runtime_context.project_id,
+        project_slug=ctx.runtime_context.project_slug,
+        cwd=str(ctx.runtime_context.project_root),
         approval_mode=getattr(run_data, "approval_mode", None),
     )
     _record_run_event(
@@ -49,8 +49,7 @@ def persist_user_message_and_trace(ctx: ChatRunContext, run_data) -> None:
             "model": ctx.model_name,
             "imageCount": len(run_data.images),
             "fileCount": len(run_data.files),
-            "workspaceId": ctx.runtime_context.workspace_id,
-            "projectId": ctx.runtime_context.project_id,
+            "projectSlug": ctx.runtime_context.project_slug,
         },
     )
 
@@ -89,8 +88,7 @@ async def emit_start_events(ctx: ChatRunContext, run_data) -> AsyncGenerator[str
         )
     yield source_event("SESSION", {
         "session_id": ctx.session_id,
-        "workspace_id": ctx.runtime_context.workspace_id,
-        "project_id": ctx.runtime_context.project_id,
+        "project_slug": ctx.runtime_context.project_slug,
     })
     _record_run_event(
         session_id=ctx.session_id,
@@ -104,8 +102,7 @@ async def emit_start_events(ctx: ChatRunContext, run_data) -> AsyncGenerator[str
             "mode": run_data.mode,
             "model": ctx.model_name,
             "sandbox": run_data.sandbox,
-            "workspaceId": ctx.runtime_context.workspace_id,
-            "projectId": ctx.runtime_context.project_id,
+            "projectSlug": ctx.runtime_context.project_slug,
             "workspace": _workspace_trace_payload(ctx.guardrails),
         },
     )
@@ -134,7 +131,14 @@ async def emit_start_events(ctx: ChatRunContext, run_data) -> AsyncGenerator[str
             f"runtimeSkills={len(ctx.used_skills)}; "
             f"tools={ctx.runtime_tool_scope.cache_key()}"
         ),
-        payload=route_trace_payload(ctx.intent_route),
+        payload={
+            **route_trace_payload(ctx.intent_route),
+            "runtimeSkillIds": [
+                str(getattr(skill, "id", "") or "")
+                for skill in ctx.used_skills
+                if str(getattr(skill, "id", "") or "")
+            ],
+        },
     )
     _record_workspace_event(
         session_id=ctx.session_id,

@@ -27,8 +27,8 @@ async def notification_event_stream(
     try:
         yield _sse("snapshot", {
             "type": "snapshot",
-            "projectId": project_id or "",
-            "unreadCount": unread_count(project_id=project_id),
+            "projectSlug": project_id or "",
+            "unreadCount": unread_count(project_slug=project_id),
         })
         while True:
             try:

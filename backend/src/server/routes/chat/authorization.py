@@ -6,6 +6,9 @@ Leader、Team Member、Subagent 與 external action 都從這裡繼承模式和�
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from src.project_resources import DirectoryGrantError, assert_granted_path, grant_roots
 from src.runtime.authorization import RunAuthorizationBinding
 from src.runtime.authorization_resources import RuntimeCapabilityReader
 from src.security.authorization.actions import RuntimeActionBuilder
@@ -75,8 +78,7 @@ async def build_chat_authorization(
     version, guardrails, _mcp, _knowledge = reader.snapshot()
     owner = RunAuthorization(
         tenantId=tenant_id,
-        workspaceId=ctx.runtime_context.workspace_id,
-        projectId=ctx.runtime_context.project_id,
+        projectSlug=ctx.runtime_context.project_slug,
         sessionId=str(getattr(ctx, "session_id", "") or ctx.runtime_context.session_id),
         runId=resolved_run_id,
         actorId=actor,
@@ -97,11 +99,40 @@ async def build_chat_authorization(
         if plan_mode_manager is not None and plan_mode_manager.is_plan_active():
             if not is_plan_mode_tool_allowed(action.tool_name, raw):
                 return "Plan Mode 不允许此变更"
+        grant_error = _reject_ungranted_file_tool(action, ctx.runtime_context, guardrails.filesystem_scope)
+        if grant_error:
+            return grant_error
         return None
 
     boundary = RuntimeAuthorizationBoundary(builder=builder, capabilities=reader, domain_check=domain_check)
     service = PlatformAuthorizationService(boundary_check=boundary, revalidate=builder.revalidate)
     return RunAuthorizationBinding(owner=owner, service=service, action_builder=builder)
+
+
+_WRITE_FILE_TOOLS = frozenset({"Write", "Edit"})
+_READ_FILE_TOOLS = frozenset({"Read", "Grep", "Glob"})
+
+
+def _reject_ungranted_file_tool(action, context, agent_scope: str) -> str | None:
+    """Write/Edit 只允许 readwrite；Read/Grep/Glob 允许 read 与 readwrite。"""
+
+    name = str(getattr(action, "tool_name", "") or "")
+    if name not in _WRITE_FILE_TOOLS and name not in _READ_FILE_TOOLS:
+        return None
+    try:
+        readable, writable = grant_roots(context, Path(agent_scope))
+    except DirectoryGrantError as exc:
+        return str(exc)
+    roots = writable if name in _WRITE_FILE_TOOLS else readable
+    for target in getattr(action, "targets", ()) or ():
+        raw = str(getattr(target, "target", "") or "")
+        if not raw.startswith("/"):
+            continue
+        try:
+            assert_granted_path(raw, roots=roots)
+        except DirectoryGrantError as exc:
+            return str(exc)
+    return None
 
 
 async def attach_live_run_authorization(ctx, *, plan_mode_manager=None) -> RunAuthorizationBinding | None:

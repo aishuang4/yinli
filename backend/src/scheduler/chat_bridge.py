@@ -1,7 +1,7 @@
 """定时 firing 与 Chat Run 的领域桥接。
 
 调度器必须走本模块，禁止直接 await start_chat_run()。
-执行面经 build_scheduled_run_context 裁剪无人值守工具。
+执行面经 build_run_context(mode="frozen") 裁剪无人值守工具。
 """
 
 from __future__ import annotations
@@ -44,14 +44,14 @@ class ScheduledRunRequest:
 
     job_id: str
     firing_id: str
-    workspace_id: str
-    project_id: str
+    project_slug: str
     agent_id: str
     frozen_prompt: str
     skill_ids: list[str]
     tool_scope: RuntimeToolScope
     scheduled_for: str
     trigger: Literal["schedule", "manual", "catch_up"]
+    cwd: str = ""
     model_config_id: str = ""
 
 
@@ -135,17 +135,18 @@ async def _start_scheduled_chat_run(req: ScheduledRunRequest) -> str:
     _validate_request(req)
     from src.config.runtime_settings import resolve_model_binding
     binding = resolve_model_binding(req.model_config_id)
-    session_id = f"sched-{uuid.uuid4().hex}"
+    job = _job_view(req)
+    policy = str(getattr(job, "context_policy", "fresh") or "fresh")
+    owner_session = str(getattr(job, "created_from_session_id", "") or "")
+    # fresh 每次新建 scheduled_job 会话，避免把聊天历史带进任务。
+    # 非 fresh 才把 Run 挂到创建任务的 owner session。
+    session_id = owner_session if policy != "fresh" and owner_session else uuid.uuid4().hex
     runtime_context = resolve_runtime_context(
-        project_id=req.project_id,
+        project_slug=req.project_slug,
         session_id=session_id,
         run_id="",
         agent_id=req.agent_id,
     )
-    if runtime_context.workspace_id != req.workspace_id:
-        raise ScheduledChatLaunchError(
-            f"Job Workspace {req.workspace_id} 与 Project {runtime_context.project_id} 不一致",
-        )
     agent = get_registered_agent(req.agent_id)
     if req.agent_id != "default" and agent is None:
         raise ScheduledChatLaunchError(f"Agent 配置不存在: {req.agent_id}")
@@ -167,8 +168,7 @@ async def _start_scheduled_chat_run(req: ScheduledRunRequest) -> str:
         agent_name=agent_name,
         frozen_prompt=req.frozen_prompt,
         skill_ids=list(req.skill_ids),
-        workspace_id=runtime_context.workspace_id,
-        project_id=runtime_context.project_id,
+        project_slug=req.project_slug,
         workspace_dir=workspace_dir,
         runtime_context=runtime_context,
         job=_job_view(req),
@@ -191,10 +191,13 @@ def _job_view(req: ScheduledRunRequest) -> SimpleNamespace:
             agent_id=req.agent_id,
             frozen_prompt=req.frozen_prompt,
             skill_ids=list(req.skill_ids),
+            required_skills=[],
+            context_policy="fresh",
+            created_from_session_id="",
             tool_scope=req.tool_scope,
             capability_contract=None,
-            workspace_id=req.workspace_id,
-            project_id=req.project_id,
+            project_slug=req.project_slug,
+            cwd=req.cwd,
         )
 
 
@@ -209,8 +212,8 @@ def _validate_request(req: ScheduledRunRequest) -> None:
         raise ScheduledChatLaunchError("frozen_prompt 不能为空")
     if not str(req.agent_id).strip():
         raise ScheduledChatLaunchError("agent_id 不能为空")
-    if not str(req.project_id).strip():
-        raise ScheduledChatLaunchError("project_id 不能为空")
+    if not str(req.project_slug).strip():
+        raise ScheduledChatLaunchError("project_slug 不能为空")
     if req.trigger not in {"schedule", "manual", "catch_up"}:
         raise ScheduledChatLaunchError(f"非法 firing trigger: {req.trigger}")
 
@@ -229,11 +232,16 @@ def _write_frozen_spec(workspace_dir: Path, req: ScheduledRunRequest) -> None:
         "jobId": req.job_id,
         "firingId": req.firing_id,
         "agentId": req.agent_id,
-        "projectId": req.project_id,
-        "workspaceId": req.workspace_id,
+        "projectSlug": req.project_slug,
+        "cwd": req.cwd,
         "scheduledFor": req.scheduled_for,
         "trigger": req.trigger,
         "skillIds": list(req.skill_ids),
+        "requiredSkills": [
+            str(item.get("id") or "")
+            for item in list(getattr(_job_view(req), "required_skills", None) or [])
+            if str(item.get("id") or "")
+        ],
         "toolScope": {
             "allowBash": req.tool_scope.allow_bash,
             "allowHttp": req.tool_scope.allow_http,

@@ -21,14 +21,14 @@ router = APIRouter()
 
 @router.get("")
 async def list_subagents(
-    project_id: Annotated[str, Query(alias="projectId")] = DEFAULT_PROJECT_ID,
+    project_slug: Annotated[str, Query(alias="projectSlug")] = DEFAULT_PROJECT_ID,
 ) -> dict:
     """列出当前工作区加载到的 Subagent 文件定义。"""
 
-    project = get_project(project_id)
+    project = get_project(project_slug)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    catalog = load_subagent_catalog(workspace_dir=str(project["rootPath"]))
+    catalog = load_subagent_catalog(workspace_dir=str(project["primaryPath"]))
     return {
         "definitions": [
             {

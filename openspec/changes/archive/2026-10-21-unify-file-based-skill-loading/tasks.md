@@ -55,11 +55,11 @@
 
 ## 8. Job 全链路接入
 
-- [x] 8.1 将 scheduler Skill capability inventory、feasibility、scripts/Bash 需求检测统一读文件 catalog 并应用 Job Agent 资格；测试启用门禁时无 DB 行中央 Skill 不再漏进库存或被错判缺失，同时不扩大工具权限。
-- [x] 8.2 将 create/confirm/resume 的显式引用、contract 合并和 manifest 冻结使用统一 resolver；测试名称/精确引用一致，显式包缺失/歧义/不可读时确认失败，不能 active 且 required manifest 为空。
-- [x] 8.3 将桥接预检、scheduled Context 和恢复使用同一冻结 ID/source/hash 读取结果；测试失败发生在 Agent/模型启动前，新同名高层包不改指旧任务，版本漂移、解绑和缺失错误进入现有 failure policy/通知。
-- [x] 8.4 完成旧 Job ID/manifest 兼容与定义文件 round-trip，保留旧冻结 hash；测试唯一路径映射成功、无法映射则暂停/待确认、重确认才更新 hash，不自动复制 Agent 全量 Skills。
-- [x] 8.5 跑通真实文件包的 daily 09:00 案例：feasibility → confirm → manual firing → 首轮 `<activated-skill>` → 第二次 fresh → 编辑后失败 → 重新确认；以模型 spy/可控测试模型证明预加载正确、system prompt 无正文、失败未调用模型，并核对 output manifest 与通知。
+- [ ] 8.1 将 scheduler Skill capability inventory、feasibility、scripts/Bash 需求检测统一读文件 catalog 并应用 Job Agent 资格；测试启用门禁时无 DB 行中央 Skill 不再漏进库存或被错判缺失，同时不扩大工具权限。
+- [ ] 8.2 将 create/confirm/resume 的显式引用、contract 合并和 manifest 冻结使用统一 resolver；测试名称/精确引用一致，显式包缺失/歧义/不可读时确认失败，不能 active 且 required manifest 为空。
+- [ ] 8.3 将桥接预检、scheduled Context 和恢复使用同一冻结 ID/source/hash 读取结果；测试失败发生在 Agent/模型启动前，新同名高层包不改指旧任务，版本漂移、解绑和缺失错误进入现有 failure policy/通知。
+- [ ] 8.4 完成旧 Job ID/manifest 兼容与定义文件 round-trip，保留旧冻结 hash；测试唯一路径映射成功、无法映射则暂停/待确认、重确认才更新 hash，不自动复制 Agent 全量 Skills。
+- [ ] 8.5 跑通真实文件包的 daily 09:00 案例：feasibility → confirm → manual firing → 首轮 `<activated-skill>` → 第二次 fresh → 编辑后失败 → 重新确认；以模型 spy/可控测试模型证明预加载正确、system prompt 无正文、失败未调用模型，并核对 output manifest 与通知。
 
 ## 9. 整体一致性与迁移验收
 

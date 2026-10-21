@@ -16,15 +16,11 @@ export function useChatComposerAgents(): {
 } {
   const pageActive = usePageActive();
   const currentView = useAppStore((state) => state.currentView);
-  const workspaceId = useAppStore((state) => state.activeWorkspaceId);
   const agents = useAgentsStore((state) => state.agents);
   const loading = useAgentsStore((state) => state.loading);
   const hostRef = useRef<HTMLDivElement>(null);
   const options = agents
-    .filter((agent) => (
-      agent.role !== 'job'
-      && (agent.id === 'default' || agent.workspaceId === workspaceId)
-    ))
+    .filter((agent) => agent.role !== 'job')
     .map((agent) => ({
       id: agent.id,
       name: agent.name,
@@ -36,8 +32,8 @@ export function useChatComposerAgents(): {
     if (currentView !== 'chat' || !pageActive) {
       return;
     }
-    void useAgentsStore.getState().syncFromServer(workspaceId, { silent: true });
-  }, [currentView, pageActive, workspaceId]);
+    void useAgentsStore.getState().syncFromServer({ silent: true });
+  }, [currentView, pageActive]);
 
   useEffect(() => {
     const node = hostRef.current;
@@ -48,11 +44,11 @@ export function useChatComposerAgents(): {
       if (!entries.some((entry) => entry.isIntersecting)) {
         return;
       }
-      void useAgentsStore.getState().syncFromServer(workspaceId, { silent: true });
+      void useAgentsStore.getState().syncFromServer({ silent: true });
     });
     observer.observe(node);
     return () => observer.disconnect();
-  }, [workspaceId]);
+  }, []);
 
   return { agents: options, loading, hostRef };
 }

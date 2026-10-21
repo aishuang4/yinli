@@ -1,4 +1,4 @@
-"""扫描 Workspace profiles，维护进程内 catalog 缓存。"""
+"""扫描 Agent profiles，维护进程内 catalog 缓存。"""
 
 from __future__ import annotations
 
@@ -12,14 +12,11 @@ from src.agents.system_agents import is_system_agent_id
 from src.catalog.agent_models import AgentResponse
 from src.catalog.models import CatalogError, CatalogSnapshot, ProfileParseResult
 from src.catalog.paths import (
-    ID_PATTERN,
-    SYSTEM_WORKSPACE_DIRNAME,
     path_stays_inside,
     profile_path,
     profiles_dir,
     system_profile_path,
     system_profiles_dir,
-    workspaces_root,
 )
 from src.catalog.profiles import parse_profile_markdown, write_profile_file
 from src.catalog.system_defaults import (
@@ -41,57 +38,56 @@ def _file_fingerprint(path: Path) -> str:
     return f"{path.resolve()}|{stat.st_size}|{stat.st_mtime_ns}|{digest}"
 
 
-def _collect_profile_files() -> tuple[list[tuple[Path, str, str]], list[CatalogError]]:
-    """返回已接受的 profile 文件，以及 symlink / 大小写冲突。"""
+def _accept_markdown(directory: Path, source_kind: str) -> tuple[list[tuple[Path, str]], list[CatalogError]]:
+    """收集一个目录里的 profile，拒绝越界 symlink 与大小写冲突。"""
 
-    root = workspaces_root()
-    if not root.is_dir():
+    if not directory.is_dir():
         return [], []
-    found: list[tuple[Path, str, str]] = []
+    found: list[tuple[Path, str]] = []
     errors: list[CatalogError] = []
-    for child in sorted(root.iterdir(), key=lambda item: item.name):
-        if not child.is_dir():
+    seen_case: dict[str, Path] = {}
+    for path in sorted(directory.glob("*.md")):
+        if path.name.startswith(".") or path.name.endswith(".tmp") or path.name.endswith(".bak"):
             continue
-        if child.name == SYSTEM_WORKSPACE_DIRNAME:
-            directory = system_profiles_dir()
-            workspace_id = "default"
-            source_kind = "system_overlay"
-        elif ID_PATTERN.match(child.name):
-            directory = profiles_dir(child.name)
-            workspace_id = child.name
-            source_kind = "profile"
-        else:
+        if ".conflict-" in path.name:
             continue
-        if not directory.is_dir():
+        if not path_stays_inside(path, directory):
+            errors.append(CatalogError(
+                path=str(path),
+                message="symlink 或解析路径指向 catalog 根外",
+                agent_id=path.stem,
+            ))
             continue
-        seen_case: dict[str, Path] = {}
-        for path in sorted(directory.glob("*.md")):
-            if path.name.startswith(".") or path.name.endswith(".tmp") or path.name.endswith(".bak"):
-                continue
-            if ".conflict-" in path.name:
-                continue
-            if not path_stays_inside(path, directory):
-                errors.append(CatalogError(
-                    path=str(path),
-                    message="symlink 或解析路径指向 catalog 根外",
-                    agent_id=path.stem,
-                ))
-                continue
-            key = unicodedata.normalize("NFC", path.name).casefold()
-            if key in seen_case:
-                errors.append(CatalogError(
-                    path=str(path),
-                    message=f"与 {seen_case[key].name} 大小写冲突，已忽略",
-                    agent_id=path.stem,
-                ))
-                continue
-            seen_case[key] = path
-            found.append((path, workspace_id, source_kind))
+        key = unicodedata.normalize("NFC", path.name).casefold()
+        if key in seen_case:
+            errors.append(CatalogError(
+                path=str(path),
+                message=f"与 {seen_case[key].name} 大小写冲突，已忽略",
+                agent_id=path.stem,
+            ))
+            continue
+        seen_case[key] = path
+        found.append((path, source_kind))
     return found, errors
 
 
-def _compute_disk_fingerprint(files: list[tuple[Path, str, str]]) -> str:
-    parts = [_file_fingerprint(path) for path, _workspace, _kind in files]
+def _collect_profile_files() -> tuple[list[tuple[Path, str]], list[CatalogError]]:
+    """返回已接受的 profile 文件，以及 symlink / 大小写冲突。"""
+
+    found: list[tuple[Path, str]] = []
+    errors: list[CatalogError] = []
+    for directory, source_kind in (
+        (system_profiles_dir(), "system_overlay"),
+        (profiles_dir(), "profile"),
+    ):
+        accepted, scan_errors = _accept_markdown(directory, source_kind)
+        found.extend(accepted)
+        errors.extend(scan_errors)
+    return found, errors
+
+
+def _compute_disk_fingerprint(files: list[tuple[Path, str]]) -> str:
+    parts = [_file_fingerprint(path) for path, _kind in files]
     parts.append(DEFAULT_AGENT_PROMPT_VERSION_TAG)
     parts.append(DEFAULT_WEBSEARCH_JOB_AGENT_VERSION_TAG)
     parts.sort()
@@ -99,6 +95,8 @@ def _compute_disk_fingerprint(files: list[tuple[Path, str, str]]) -> str:
 
 
 def _merge_system_agent(base: AgentResponse, overlay: AgentResponse | None) -> AgentResponse:
+    """代码模板为底，overlay 覆盖可配置字段，角色保持模板。"""
+
     if overlay is None:
         return base
     merged = base.model_copy(update={
@@ -118,7 +116,6 @@ def _merge_system_agent(base: AgentResponse, overlay: AgentResponse | None) -> A
         "source_path": overlay.source_path,
         "source_kind": "system_overlay",
         "role": base.role,
-        "workspace_id": "default",
     })
     from src.catalog.profiles import apply_role_invariants
 
@@ -135,14 +132,14 @@ def _scan() -> CatalogSnapshot:
     invalid_by_id: dict[str, str] = {}
     overlays: dict[str, AgentResponse] = {}
 
-    for path, workspace_id, source_kind in files:
+    for path, source_kind in files:
         try:
             text = path.read_text(encoding="utf-8")
         except OSError as exc:
             errors.append(CatalogError(path=str(path), message=f"读取失败: {exc}"))
             continue
         parsed: ProfileParseResult = parse_profile_markdown(
-            text, path=path, workspace_id=workspace_id, source_kind=source_kind,
+            text, path=path, source_kind=source_kind,
         )
         warnings.extend(f"{path}: {item}" for item in parsed.warnings)
         if parsed.agent is None:
@@ -237,16 +234,6 @@ def list_registered_agents() -> list[AgentResponse]:
     return list(ensure_loaded().agents.values())
 
 
-def list_workspace_agents(workspace_id: str) -> list[AgentResponse]:
-    """当前 Workspace 用户 Agent + 系统 Agent。"""
-
-    return [
-        agent
-        for agent in list_registered_agents()
-        if is_system_agent_id(agent.id) or agent.workspace_id == workspace_id
-    ]
-
-
 def save_agent(agent: AgentResponse) -> AgentResponse:
     """写入 profile 或系统 overlay，并失效缓存。"""
 
@@ -256,18 +243,14 @@ def save_agent(agent: AgentResponse) -> AgentResponse:
     prepared = apply_role_invariants(agent.model_copy(update={"updated_at": utc_now()}), warnings)
     if is_system_agent_id(prepared.id):
         path = system_profile_path(prepared.id)
-        prepared = prepared.model_copy(update={
-            "workspace_id": "default",
-            "source_kind": "system_overlay",
-        })
+        prepared = prepared.model_copy(update={"source_kind": "system_overlay"})
     else:
-        path = profile_path(prepared.workspace_id, prepared.id)
+        path = profile_path(prepared.id)
         prepared = prepared.model_copy(update={"source_kind": "profile"})
     if path.exists():
         existing = parse_profile_markdown(
             path.read_text(encoding="utf-8"),
             path=path,
-            workspace_id=prepared.workspace_id,
             source_kind=prepared.source_kind,
         )
         if existing.agent is not None:
@@ -288,7 +271,7 @@ def delete_agent(agent_id: str) -> None:
     existing = get_registered_agent(agent_id)
     if existing is None:
         raise FileNotFoundError(agent_id)
-    path = Path(existing.source_path) if existing.source_path else profile_path(existing.workspace_id, agent_id)
+    path = Path(existing.source_path) if existing.source_path else profile_path(agent_id)
     if path.exists():
         path.unlink()
     invalidate_catalog()
@@ -298,7 +281,7 @@ def delete_agent(agent_id: str) -> None:
 
 
 def import_sqlite_agent_record(data: dict) -> AgentResponse:
-    """测试兼容：sqlite upsert 在迁移完成后落到文件。"""
+    """把一条 Agent 记录写成 profile。未知键由模型丢弃。"""
 
     payload = {
         "id": data["id"],
@@ -316,7 +299,6 @@ def import_sqlite_agent_record(data: dict) -> AgentResponse:
         "status": "idle",
         "created_at": data.get("created_at") or utc_now(),
         "updated_at": data.get("updated_at") or utc_now(),
-        "workspaceId": data.get("workspaceId") or data.get("workspace_id") or "default",
         "role": data.get("role") or "chat",
         "jobToolkit": data.get("jobToolkit") or data.get("job_toolkit") or {},
     }

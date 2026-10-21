@@ -836,8 +836,8 @@ def test_subagent_runner_injects_project_paths_and_uses_session_workspace(tmp_pa
     project_root = tmp_path / "project"
     project_root.mkdir()
     platform_context = RuntimeContext(
-        workspace_id="workspace-1",
-        project_id="project-1",
+        
+        project_slug="project-1",
         project_root=project_root,
         session_id="session-1",
         run_id="run-1",

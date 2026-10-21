@@ -45,8 +45,8 @@ def _message(**overrides) -> NotificationMessage:
     payload = {
         "kind": "job_completed",
         "title": "周报已完成",
-        "workspace_id": DEFAULT_WORKSPACE_ID,
-        "project_id": DEFAULT_PROJECT_ID,
+        
+        "project_slug": DEFAULT_PROJECT_ID,
         "job_id": "job-1",
         "body": "查看产物",
     }
@@ -69,7 +69,7 @@ def test_dispatch_persists_in_app_and_publishes(isolated_db):
         result = dispatch_notification(_message())
         assert result.in_app_record is not None
         assert result.in_app_record["kind"] == "job_completed"
-        assert list_user_notifications(project_id=DEFAULT_PROJECT_ID)
+        assert list_user_notifications(project_slug=DEFAULT_PROJECT_ID)
         event = queue.get_nowait()
         assert event["type"] == "notification"
         assert event["notification"]["title"] == "周报已完成"
@@ -95,13 +95,13 @@ def test_create_notification_adapter_writes_inbox(isolated_db):
     record = create_notification(
         kind="job_failed",
         title="周报失败",
-        workspace_id=DEFAULT_WORKSPACE_ID,
-        project_id=DEFAULT_PROJECT_ID,
+        
+        project_slug=DEFAULT_PROJECT_ID,
         job_id="job-1",
         body="需要更新任务",
     )
     assert record["id"].startswith("ntf-")
-    assert unread_count(project_id=DEFAULT_PROJECT_ID) == 1
+    assert unread_count(project_slug=DEFAULT_PROJECT_ID) == 1
 
 
 def test_notification_settings_catalog_and_reject_unimplemented_enable(client):
@@ -165,8 +165,8 @@ def test_mark_read_publishes_to_hub(isolated_db):
     record = create_notification(
         kind="job_completed",
         title="早餐已完成",
-        workspace_id=DEFAULT_WORKSPACE_ID,
-        project_id=DEFAULT_PROJECT_ID,
+        
+        project_slug=DEFAULT_PROJECT_ID,
     )
     queue = notification_hub.subscribe(DEFAULT_PROJECT_ID)
     try:

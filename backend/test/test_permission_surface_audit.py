@@ -41,7 +41,7 @@ def test_sse_and_trace_views_drop_credentials(local_tenant):
     ]})
     blob = json.dumps({"delta": delta, "end": ended, "trace": traced, "ui": confirm}, ensure_ascii=False)
     assert SECRET not in blob and "sk-audittestsecret" not in blob
-    assert delta["delta"] == ""
+    assert delta["delta"] and THINKING in delta["delta"] and HIDDEN_CREDENTIAL in delta["delta"]
     assert HIDDEN_CREDENTIAL in ended["input"]
     assert traced["delta"] == ""
     assert "thinking" not in ended

@@ -52,8 +52,7 @@ class RunAuthorization(AuthorizationModel):
     """从服务端构造的 Run/actor 授权归属与策略版本。"""
 
     tenant_id: str = Field(alias="tenantId", min_length=1)
-    workspace_id: str = Field(alias="workspaceId", min_length=1)
-    project_id: str = Field(alias="projectId", min_length=1)
+    project_slug: str = Field(alias="projectSlug", min_length=1)
     session_id: str = Field(alias="sessionId", min_length=1)
     run_id: str = Field(alias="runId", min_length=1)
     actor_id: str = Field(alias="actorId", min_length=1)

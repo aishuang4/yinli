@@ -7,11 +7,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Modal } from '@/components/design';
 import { ScheduledJobDetailPage } from '../features/scheduled-jobs/ScheduledJobDetailPage';
+import { ScheduledJobEditorModal } from '../features/scheduled-jobs/ScheduledJobEditorModal';
 import { ScheduledJobLandingPage } from '../features/scheduled-jobs/ScheduledJobLandingPage';
 import { useModelCatalog } from '../features/models/useModelCatalog';
 import { useAgents } from '../hooks/useAgents';
 import { useScheduledJobs } from '../hooks/useScheduledJobs';
-import { useWorkspaceProjects } from '../hooks/useWorkspaceProjects';
+import { useProjects } from '../hooks/useProjects';
 import { useAppStore } from '../stores/appStore';
 import type { ScheduledJob, ScheduledJobRun } from '../types/scheduledJob';
 import { notifyError, notifySuccess } from '../utils/feedback';
@@ -29,12 +30,14 @@ export function ScheduledJobsPage() {
     deleteJob,
     updateSchedule,
     updateModel,
+    createJob,
+    updateJobFields,
     listRuns,
     cancelRun,
   } = useScheduledJobs();
   const { agents } = useAgents();
   const { catalog } = useModelCatalog(false);
-  const { projects, activeProjectId } = useWorkspaceProjects();
+  const { projects, activeProjectSlug } = useProjects();
   const pendingJobId = useAppStore((state) => state.pendingJobId);
   const clearPendingJobId = useAppStore((state) => state.clearPendingJobId);
 
@@ -43,6 +46,8 @@ export function ScheduledJobsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<ScheduledJob | null>(null);
+  const [editorJob, setEditorJob] = useState<ScheduledJob | null>(null);
+  const [creating, setCreating] = useState(false);
   const [runs, setRuns] = useState<ScheduledJobRun[]>([]);
   const [runsLoading, setRunsLoading] = useState(false);
   const [runsError, setRunsError] = useState<string | null>(null);
@@ -52,8 +57,8 @@ export function ScheduledJobsPage() {
   ), [agents]);
 
   const projectRoot = useMemo(() => (
-    projects.find((item) => item.id === activeProjectId)?.rootPath || ''
-  ), [activeProjectId, projects]);
+    projects.find((item) => item.slug === activeProjectSlug)?.primaryPath || ''
+  ), [activeProjectSlug, projects]);
 
   const filteredJobs = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -136,6 +141,27 @@ export function ScheduledJobsPage() {
     }
   }
 
+  const editorModal = (
+    <ScheduledJobEditorModal
+      open={creating || editorJob !== null}
+      job={editorJob}
+      agents={agents}
+      onCancel={() => {
+        setCreating(false);
+        setEditorJob(null);
+      }}
+      onCreate={async (payload) => {
+        const created = await createJob(payload);
+        setCreating(false);
+        setSelectedId(created.id);
+      }}
+      onUpdate={async (jobId, patch) => {
+        await updateJobFields(jobId, patch);
+        setEditorJob(null);
+      }}
+    />
+  );
+
   const deleteModal = (
     <Modal
       title="删除定时任务"
@@ -154,9 +180,6 @@ export function ScheduledJobsPage() {
   if (selectedJob) {
     return (
       <>
-        <p className="px-4 pt-3 text-xs text-[var(--color-text-secondary)]">
-          若该任务使用智能审核，遇到不确定动作会结束本次运行，不会自动改成完全开放。
-        </p>
         <ScheduledJobDetailPage
           job={selectedJob}
           agentName={agentNames[selectedJob.agentId] || selectedJob.agentId}
@@ -169,6 +192,7 @@ export function ScheduledJobsPage() {
           canOpenDirectory={Boolean(window.electronAPI)}
           projectRoot={projectRoot}
           onBack={() => setSelectedId(null)}
+          onEdit={() => setEditorJob(selectedJob)}
           onConfirm={() => void runJobAction(selectedJob.id, () => confirmJob(selectedJob.id))}
           onPause={() => void runJobAction(selectedJob.id, () => pauseJob(selectedJob.id))}
           onResume={() => void runJobAction(selectedJob.id, () => resumeJob(selectedJob.id))}
@@ -196,6 +220,7 @@ export function ScheduledJobsPage() {
           }}
           onOpenDirectory={(targetPath) => void handleOpenDirectory(targetPath)}
         />
+        {editorModal}
         {deleteModal}
       </>
     );
@@ -215,12 +240,14 @@ export function ScheduledJobsPage() {
         onQueryChange={setQuery}
         onStatusFilterChange={setStatusFilter}
         onRefresh={() => void refresh()}
+        onCreate={() => setCreating(true)}
         onSelect={(job) => setSelectedId(job.id)}
         onConfirm={(job) => void runJobAction(job.id, () => confirmJob(job.id))}
         onPause={(job) => void runJobAction(job.id, () => pauseJob(job.id))}
         onResume={(job) => void runJobAction(job.id, () => resumeJob(job.id))}
         onDelete={setDeleteConfirm}
       />
+      {editorModal}
       {deleteModal}
     </>
   );

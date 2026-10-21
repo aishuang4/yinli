@@ -2,8 +2,9 @@
 
 from typing import Annotated, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 
+from src.config.runtime_paths import tenant_root
 from src.scheduler.service import ScheduledJobService
 from src.server.routes.agents import remove_mcp_tools_from_agents
 from src.mcp.registry import (
@@ -28,21 +29,15 @@ from src.mcp.registry import (
     write_mcp_file,
     ensure_mcp_file_catalog,
     is_mcp_catalog_migrated,
-    mcp_dir,
     delete_named_secret,
     resolve_headers,
     _resolve_mcp_runtime_servers,
-    list_json_records,
-    db_list_mcp_servers,
-    migrate_json_list_file,
-    replace_mcp_servers,
     McpTransport,
     McpInstallStatus,
     McpTool,
     McpServer,
     McpInstallRequest,
     McpRegisterRequest,
-    MCP_NAMESPACE,
     RESERVED_MCP_HEADERS,
     _utc_now,
     _slugify,
@@ -98,7 +93,6 @@ async def list_mcp_servers(
     q: str = "",
     category: str = "",
     installed: Optional[bool] = None,
-    workspace_id: Annotated[str, Query(alias="workspaceId")] = "default",
 ) -> list[McpServer]:
     """获取 MCP Server 列表，支持搜索、分类和安装状态筛选。"""
 
@@ -107,8 +101,7 @@ async def list_mcp_servers(
     result = [
         server
         for server in _mcp_servers.values()
-        if (server.id in _builtin_mcp_servers or server.workspace_id == workspace_id)
-        and not _hosted_hides_mcp(server)
+        if not _hosted_hides_mcp(server)
     ]
 
     if query:
@@ -142,18 +135,12 @@ async def list_mcp_categories() -> list[str]:
 
 
 @router.get("/tools", response_model=list[McpTool])
-async def list_installed_mcp_tools(
-    workspace_id: Annotated[str, Query(alias="workspaceId")] = "default",
-) -> list[McpTool]:
+async def list_installed_mcp_tools() -> list[McpTool]:
     """获取已安装并启用的 MCP 工具列表，用于 Agent 配置选择。"""
 
     tools: list[McpTool] = []
     for server in _mcp_servers.values():
-        if (
-            server.status == "installed"
-            and server.enabled
-            and (server.id in _builtin_mcp_servers or server.workspace_id == workspace_id)
-        ):
+        if server.status == "installed" and server.enabled and not _hosted_hides_mcp(server):
             tools.extend(server.tools)
     return tools
 
@@ -185,7 +172,6 @@ async def register_mcp_server(data: McpRegisterRequest) -> McpServer:
             "enabled": True,
             "installedAt": now,
             "updatedAt": now,
-            "workspaceId": data.workspace_id,
         }
     )
     _mcp_servers[server.id] = server
@@ -266,7 +252,7 @@ async def delete_mcp_server(server_id: str) -> None:
             delete_named_secret(ref)
         except Exception:
             pass
-    yaml_path = mcp_dir(server.workspace_id) / f"{server.id}.yaml"
+    yaml_path = tenant_root() / "mcp" / f"{server.id}.yaml"
     if yaml_path.exists():
         yaml_path.unlink()
     _job_service.pause_jobs_for_catalog_change(resource_type="mcp", resource_id=server_id)

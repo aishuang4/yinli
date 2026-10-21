@@ -10,7 +10,6 @@ from src.memory.markdown_store import MarkdownMemoryStore
 from src.memory.nodes import MemoryNodeService, MemoryNodeWrite
 from src.memory.prompt_cache import invalidate_memory_prompts
 from src.memory.settings import get_memory_admission_policy, save_memory_admission_policy
-from src.memory.skill_evolution import register_skill_evolution_record
 from src.memory.timeline import search_timeline
 from src.memory.trace import MEMORY_AUDIT_EVENT_TYPE, record_memory_audit_event
 from src.server.routes.memory_api.models import *
@@ -19,14 +18,11 @@ from src.storage.database import (
     count_pending_memory_markdown_candidates,
     get_memory_markdown_candidate,
     get_memory_node,
-    get_skill_evolution_record,
     list_memory_markdown_candidates,
     list_run_events_by_type,
-    list_skill_evolution_records,
     record_memory_retrieval_feedback,
     set_memory_markdown_candidate_status,
     update_memory_node_status,
-    update_skill_evolution_record_status,
 )
 from src.vector_store.policy import get_vector_store_policy
 
@@ -38,8 +34,7 @@ async def upsert_node(data: MemoryNodeCreate) -> dict[str, Any]:
 
     item = MemoryNodeWrite(
         id=data.id,
-        workspace_id=data.workspace_id,
-        project_id=data.project_id,
+        project_slug=data.project_slug,
         agent_id=data.agent_id,
         user_id=data.user_id,
         node_date=data.node_date,
@@ -68,8 +63,7 @@ async def node_tree(
     date_from: str | None = Query(default=None, alias="dateFrom"),
     date_to: str | None = Query(default=None, alias="dateTo"),
     limit: int = Query(default=30, ge=1, le=500),
-    workspace_id: str = Query(default="default", alias="workspaceId"),
-    project_id: str = Query(default="default", alias="projectId"),
+    project_slug: str = Query(default="default", alias="projectSlug"),
     user_id: str | None = Query(default=None, alias="userId"),
     status: str = Query(default="active", pattern="^(active|disabled|archived|deleted|all)$"),
 ) -> dict[str, Any]:
@@ -80,8 +74,7 @@ async def node_tree(
         date_from=date_from,
         date_to=date_to,
         limit=limit,
-        workspace_id=workspace_id,
-        project_id=project_id,
+        project_slug=project_slug,
         user_id=user_id,
         status=None if status == "all" else status,
     )
@@ -94,8 +87,7 @@ async def node_query(
     date_from: str | None = Query(default=None, alias="dateFrom"),
     date_to: str | None = Query(default=None, alias="dateTo"),
     limit: int = Query(default=10, ge=1, le=100),
-    workspace_id: str = Query(default="default", alias="workspaceId"),
-    project_id: str = Query(default="default", alias="projectId"),
+    project_slug: str = Query(default="default", alias="projectSlug"),
     user_id: str | None = Query(default=None, alias="userId"),
     status: str = Query(default="active", pattern="^(active|disabled|archived|deleted|all)$"),
 ) -> dict[str, Any]:
@@ -107,8 +99,7 @@ async def node_query(
         date_from=date_from,
         date_to=date_to,
         limit=limit,
-        workspace_id=workspace_id,
-        project_id=project_id,
+        project_slug=project_slug,
         user_id=user_id,
         status=None if status == "all" else status,
     )
@@ -117,12 +108,12 @@ async def node_query(
 @router.get("/nodes/{node_id}")
 async def get_node(
     node_id: str,
-    project_id: Annotated[str, Query(alias="projectId")] = "default",
+    project_slug: Annotated[str, Query(alias="projectSlug")] = "default",
 ) -> dict[str, Any]:
     """读取单个长期节点记忆。"""
 
     node = get_memory_node(node_id)
-    if not node or str(node.get("project_id") or "default") != project_id:
+    if not node or str(node.get("projectSlug") or "default") != project_slug:
         raise HTTPException(status_code=404, detail="Memory node not found")
     return node
 
@@ -131,12 +122,12 @@ async def get_node(
 async def update_node_status(
     node_id: str,
     data: MemoryNodeStatusUpdate,
-    project_id: Annotated[str, Query(alias="projectId")] = "default",
+    project_slug: Annotated[str, Query(alias="projectSlug")] = "default",
 ) -> dict[str, Any]:
     """软更新历史记忆状态，并尽力同步向量索引。"""
 
     existing = get_memory_node(node_id)
-    if not existing or str(existing.get("project_id") or "default") != project_id:
+    if not existing or str(existing.get("projectSlug") or "default") != project_slug:
         raise HTTPException(status_code=404, detail="Memory node not found")
     updated = update_memory_node_status(node_id, status=data.status)
     invalidate_memory_prompts()

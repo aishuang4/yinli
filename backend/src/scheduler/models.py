@@ -95,8 +95,8 @@ class ScheduledJob(BaseModel):
     """SQLite scheduled_jobs 行的领域对象。"""
 
     id: str
-    workspace_id: str
-    project_id: str
+    project_slug: str
+    cwd: str = ""
     name: str
     summary: str = ""
     status: JobStatus
@@ -111,6 +111,8 @@ class ScheduledJob(BaseModel):
     last_run_at: str | None = None
     frozen_prompt: str
     skill_ids: list[str] = Field(default_factory=list)
+    required_skills: list[dict[str, Any]] = Field(default_factory=list)
+    context_policy: str = "fresh"
     tool_scope: JobToolScope = Field(default_factory=JobToolScope)
     input_spec: dict[str, Any] = Field(default_factory=dict)
     output_spec: dict[str, Any] = Field(default_factory=dict)
@@ -187,8 +189,7 @@ class ScheduledJobRun(BaseModel):
 
     id: str
     job_id: str
-    workspace_id: str
-    project_id: str
+    project_slug: str
     trigger: FiringTrigger
     scheduled_for: str
     status: FiringStatus

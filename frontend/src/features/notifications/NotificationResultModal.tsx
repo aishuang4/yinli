@@ -30,8 +30,7 @@ function mapRun(raw: Record<string, unknown>): ScheduledJobRun {
   return {
     id: String(raw.id ?? ''),
     jobId: String(raw.jobId ?? ''),
-    workspaceId: String(raw.workspaceId ?? ''),
-    projectId: String(raw.projectId ?? ''),
+    projectSlug: String(raw.projectSlug ?? ''),
     trigger: (raw.trigger as ScheduledJobRun['trigger']) || 'schedule',
     scheduledFor: String(raw.scheduledFor ?? ''),
     status: raw.status as ScheduledJobRun['status'],

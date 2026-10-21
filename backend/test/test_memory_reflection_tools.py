@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from src.tools.memory_reflection import MemoryFileToolSet, SkillDraftPropose
+from src.tools.memory_reflection import MemoryFileToolSet
 
 
 def test_memory_read_returns_bound_file_content():
@@ -90,28 +90,6 @@ def test_memory_delete_removes_exact_text_once():
     assert "临时记忆" not in state["content"]
     assert "保留记忆" in state["content"]
     assert tool_set.operations[0]["operation"] == "delete"
-
-
-def test_skill_draft_propose_records_candidate_without_registering():
-    tool = SkillDraftPropose()
-
-    result = asyncio.run(
-        tool(
-            reusable=True,
-            confidence=0.88,
-            reason="形成可复用流程。",
-            name="Memory Hook Design",
-            description="设计记忆 hook。",
-            trigger="需要规划记忆 hook 时使用。",
-            content="1. 明确生命周期。\n2. 接入工具。",
-            tags=["memory", "hooks"],
-        ),
-    )
-
-    assert "Skill 草稿候选已提交" in result.content[0].text
-    assert tool.drafts[0]["reusable"] is True
-    assert tool.drafts[0]["draft"]["name"] == "Memory Hook Design"
-    assert tool.drafts[0]["draft"]["tags"] == ["memory", "hooks"]
 
 
 def _tool_set(state: dict[str, str]) -> MemoryFileToolSet:

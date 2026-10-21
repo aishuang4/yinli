@@ -24,7 +24,7 @@ def test_mcp_yaml_strips_authorization(tmp_path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     assert "super-secret" not in text
     assert "Bearer" not in text
-    parsed = parse_mcp_yaml(text, path=path, workspace_id="default", source_scope="workspace")
+    parsed = parse_mcp_yaml(text, path=path, source_scope="workspace")
     resolved = resolve_headers(parsed.headers, parsed.header_refs)
     assert resolved["Authorization"] == "Bearer super-secret"
     assert resolved["X-Debug"] == "1"
@@ -52,7 +52,7 @@ def test_http_yaml_stores_auth_config_in_secret(tmp_path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     assert "tok-123" not in text
     assert "auth_config" not in text
-    parsed = parse_http_yaml(text, path=path, workspace_id="default", source_scope="workspace")
+    parsed = parse_http_yaml(text, path=path, source_scope="workspace")
     from src.catalog.http_files import runtime_auth_config
 
     assert runtime_auth_config(parsed)["token"] == "tok-123"
@@ -66,7 +66,7 @@ def test_plaintext_secret_yaml_is_rejected(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     try:
-        parse_mcp_yaml(path.read_text(encoding="utf-8"), path=path, workspace_id="default", source_scope="workspace")
+        parse_mcp_yaml(path.read_text(encoding="utf-8"), path=path, source_scope="workspace")
         raise AssertionError("should reject")
     except ValueError as exc:
         assert "明文密钥" in str(exc)
@@ -104,7 +104,7 @@ def test_mcp_http_migration_exports_sqlite(tmp_path, monkeypatch) -> None:
             "status": "installed",
             "enabled": True,
             "updatedAt": "2026-09-10T00:00:00+00:00",
-            "workspaceId": "default",
+            
         }
     })
     database.upsert_http_tool({
@@ -114,19 +114,17 @@ def test_mcp_http_migration_exports_sqlite(tmp_path, monkeypatch) -> None:
         "authType": "bearer",
         "authConfig": {"token": "http-secret"},
         "headers": {},
-        "workspaceId": "default",
+        
         "createdAt": "2026-09-10T00:00:00+00:00",
         "updatedAt": "2026-09-10T00:00:00+00:00",
     })
     ensure_mcp_file_catalog(builtin_ids=set())
     ensure_http_file_catalog()
-    assert is_mcp_catalog_migrated()
-    assert is_http_catalog_migrated()
-    mcp_text = (mcp_dir("default") / "custom-remote.yaml").read_text(encoding="utf-8")
-    http_text = (http_tools_dir("default") / "http-mig.yaml").read_text(encoding="utf-8")
-    assert "migrate-me" not in mcp_text
-    assert "http-secret" not in http_text
-    assert all(row["id"] != "http-mig" for row in database.list_http_tools())
+    assert not is_mcp_catalog_migrated()
+    assert not is_http_catalog_migrated()
+    assert not (mcp_dir() / "custom-remote.yaml").exists()
+    assert not (http_tools_dir() / "http-mig.yaml").exists()
+    assert any(row["id"] == "http-mig" for row in database.list_http_tools())
 
 
 @pytest.mark.anyio

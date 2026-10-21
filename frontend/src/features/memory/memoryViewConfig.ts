@@ -12,7 +12,6 @@ import {
   FileText,
   Globe2,
   Settings2,
-  Sparkles,
   UserRound,
   XCircle,
 } from 'lucide-react';
@@ -22,10 +21,9 @@ import type {
   MemoryCandidateStatus,
   MemoryMarkdownCandidate,
   MemoryNodeStatus,
-  SkillEvolutionRecordStatus,
 } from '../../types/memory';
 
-export type MemoryTab = 'habits' | 'professional' | 'timeline' | 'markdown' | 'candidates' | 'nodes' | 'skills' | 'settings';
+export type MemoryTab = 'habits' | 'professional' | 'timeline' | 'markdown' | 'candidates' | 'nodes' | 'settings';
 
 export interface MarkdownTarget {
   key: MarkdownMemoryScope;
@@ -44,7 +42,6 @@ export const MEMORY_TABS: Array<{ key: MemoryTab; label: string; icon: typeof Fi
   { key: 'habits', label: '习惯', icon: UserRound },
   { key: 'professional', label: '专业区', icon: Bot },
   { key: 'timeline', label: '时间线', icon: Clock3 },
-  { key: 'skills', label: 'Skill 自进化队列', icon: Sparkles },
   { key: 'markdown', label: '旧 Markdown', icon: FileText },
   { key: 'candidates', label: '待确认记忆', icon: ClipboardCheck },
   { key: 'nodes', label: '旧历史节点', icon: Database },
@@ -57,14 +54,6 @@ export const NODE_STATUS_OPTIONS: Array<{ label: string; value: MemoryNodeStatus
   { label: '已禁用', value: 'disabled' },
   { label: '已归档', value: 'archived' },
   { label: '已删除', value: 'deleted' },
-];
-
-export const SKILL_STATUS_OPTIONS: Array<{ label: string; value: SkillEvolutionRecordStatus | 'all' }> = [
-  { label: '全部状态', value: 'all' },
-  { label: '草稿候选', value: 'draft' },
-  { label: '已注册', value: 'registered' },
-  { label: '已跳过', value: 'skipped' },
-  { label: '失败', value: 'failed' },
 ];
 
 export const CANDIDATE_STATUS_OPTIONS: Array<{ label: string; value: MemoryCandidateStatus | 'all' }> = [
@@ -96,23 +85,6 @@ export function candidateStatusMeta(status: MemoryCandidateStatus): {
     return { label: '采纳失败', color: 'mauve', icon: AlertTriangle };
   }
   return { label: '待确认', color: 'blue', icon: Clock3 };
-}
-
-export function skillStatusMeta(status: SkillEvolutionRecordStatus): {
-  label: string;
-  color: 'default' | 'success' | 'blue' | 'mauve';
-  icon: LucideIcon;
-} {
-  if (status === 'registered') {
-    return { label: '已注册', color: 'success', icon: CheckCircle2 };
-  }
-  if (status === 'draft') {
-    return { label: '草稿', color: 'blue', icon: Sparkles };
-  }
-  if (status === 'failed') {
-    return { label: '失败', color: 'mauve', icon: XCircle };
-  }
-  return { label: '已跳过', color: 'default', icon: AlertTriangle };
 }
 
 export function formatDateTime(value: string): string {

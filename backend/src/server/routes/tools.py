@@ -14,7 +14,7 @@ from src.generated_file_preview import build_preview_payload, guess_media_type
 
 from src.catalog.http_files import HttpToolFileRecord, discover_http_files, runtime_auth_config, write_http_file
 from src.catalog.migrate_mcp_http import ensure_http_file_catalog, is_http_catalog_migrated
-from src.catalog.paths import http_tools_dir
+from src.config.runtime_paths import tenant_root
 from src.catalog.secrets import delete_named_secret, redact_headers, resolve_headers
 from src.scheduler.service import ScheduledJobService
 from src.server.routes.agents import remove_knowledge_tools_from_agents
@@ -131,7 +131,6 @@ class HttpToolBase(BaseModel):
     readonly: bool = True
     approval_policy: str = Field(default="inherit", alias="approvalPolicy")
     enabled: bool = True
-    workspace_id: str = Field(default="default", alias="workspaceId")
 
     model_config = {"populate_by_name": True}
 
@@ -248,7 +247,6 @@ def _http_response_from_file(record: HttpToolFileRecord, *, for_runtime: bool) -
         "readonly": record.readonly,
         "approvalPolicy": record.approval_policy,
         "enabled": record.enabled,
-        "workspaceId": record.workspace_id,
         "createdAt": record.created_at or _utc_now(),
         "updatedAt": record.updated_at or _utc_now(),
     })
@@ -498,12 +496,10 @@ async def delete_knowledge_tool(tool_id: str) -> None:
 
 
 @router.get("/http", response_model=list[HttpToolResponse])
-async def list_http_tool_configs(
-    workspace_id: Annotated[str, Query(alias="workspaceId")] = "default",
-) -> list[HttpToolResponse]:
+async def list_http_tool_configs() -> list[HttpToolResponse]:
     """列出通用 HTTP 工具。"""
 
-    return [tool for tool in _http_tool_records() if tool.workspace_id == workspace_id]
+    return list(_http_tool_records())
 
 
 @router.post("/http", response_model=HttpToolResponse, status_code=201)
@@ -536,12 +532,11 @@ async def create_http_tool_config(data: HttpToolCreate) -> HttpToolResponse:
             readonly=bool(record.get("readonly", True)),
             approval_policy=str(record.get("approvalPolicy") or "inherit"),
             enabled=bool(record.get("enabled", True)),
-            workspace_id=str(record.get("workspaceId") or "default"),
             created_at=now,
             updated_at=now,
         )
         write_http_file(
-            http_tools_dir(file_record.workspace_id) / f"{file_record.id}.yaml",
+            tenant_root() / "tools" / f"{file_record.id}.yaml",
             file_record,
             auth_config=dict(record.get("authConfig") or {}),
         )
@@ -578,13 +573,12 @@ async def update_http_tool_config(tool_id: str, data: HttpToolUpdate) -> HttpToo
             readonly=bool(next_data.get("readonly", True)),
             approval_policy=str(next_data.get("approvalPolicy") or "inherit"),
             enabled=bool(next_data.get("enabled", True)),
-            workspace_id=str(next_data.get("workspaceId") or "default"),
             created_at=str(next_data.get("createdAt") or ""),
             updated_at=str(next_data.get("updatedAt") or ""),
         )
         incoming_auth = data.auth_config if data.auth_config is not None else existing.auth_config
         write_http_file(
-            http_tools_dir(file_record.workspace_id) / f"{file_record.id}.yaml",
+            tenant_root() / "tools" / f"{file_record.id}.yaml",
             file_record,
             auth_config=dict(incoming_auth or {}),
         )
@@ -598,7 +592,7 @@ async def delete_http_tool_config(tool_id: str) -> None:
 
     existing = next((item for item in _http_tool_records() if item.id == tool_id), None)
     deleted = db_delete_http_tool(tool_id)
-    yaml_path = http_tools_dir(existing.workspace_id if existing else "default") / f"{tool_id}.yaml"
+    yaml_path = tenant_root() / "tools" / f"{tool_id}.yaml"
     file_existed = yaml_path.exists()
     if file_existed:
         yaml_path.unlink()

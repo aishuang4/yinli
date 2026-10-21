@@ -45,7 +45,7 @@ _MUTATION = frozenset({
     *(("src.tools.delegate_task", name) for name in
       ("SubagentTaskCancel", "SubagentTaskWait", "SubagentResultRead")),
     *(("src.tools.memory_reflection", name) for name in
-      ("MemoryAdd", "MemoryUpdate", "MemoryDelete", "SkillDraftPropose")),
+      ("MemoryAdd", "MemoryUpdate", "MemoryDelete")),
     ("src.server.routes.chat.team_runtime.tools", "ReadMailbox"),
     *(("src.tools.scheduled_job_tools", name) for name in
       ("ScheduleJob", "PauseJob", "ConfirmJob", "RecheckJobCapabilities")),

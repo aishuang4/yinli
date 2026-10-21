@@ -16,7 +16,7 @@ const DETAIL_POLL_MS = 3000;
 
 export function TracePage() {
   const active = useAppStore((state) => state.currentView === 'traces');
-  const activeProjectId = useAppStore((state) => state.activeProjectId);
+  const activeProjectSlug = useAppStore((state) => state.activeProjectSlug);
   const [traces, setTraces] = useState<TraceSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string>('');
   const [detail, setDetail] = useState<TraceDetail | null>(null);
@@ -35,7 +35,7 @@ export function TracePage() {
     setLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams({ projectId: activeProjectId });
+      const params = new URLSearchParams({ projectSlug: activeProjectSlug });
       const response = await fetch(`/api/traces?${params.toString()}`, { signal: controller.signal });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data: TraceSummary[] = await response.json();
@@ -48,7 +48,7 @@ export function TracePage() {
         setLoading(false);
       }
     }
-  }, [active, activeProjectId]);
+  }, [active, activeProjectSlug]);
 
   const loadDetail = useCallback(async (traceId: string, silent = false) => {
     if (!active) return;
@@ -66,7 +66,7 @@ export function TracePage() {
       setDetail(null);
     }
     try {
-      const params = new URLSearchParams({ projectId: activeProjectId });
+      const params = new URLSearchParams({ projectSlug: activeProjectSlug });
       const response = await fetch(`/api/traces/${traceId}?${params.toString()}`, { signal: controller.signal });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json() as TraceDetail;
@@ -79,13 +79,13 @@ export function TracePage() {
       setError(err instanceof Error ? err.message : '加载运行轨迹详情失败');
       setDetailLoading(false);
     }
-  }, [active, activeProjectId]);
+  }, [active, activeProjectSlug]);
 
   useEffect(() => {
     setSelectedId('');
     setDetail(null);
     setTraces([]);
-  }, [activeProjectId]);
+  }, [activeProjectSlug]);
 
   useEffect(() => {
     if (!active) return;

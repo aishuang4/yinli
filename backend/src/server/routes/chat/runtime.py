@@ -1,5 +1,6 @@
 """运行时配置构建 — guardrails、权限模式、MCP/知识库工具规格、用户消息内容。"""
 
+import os
 from typing import Any
 from pathlib import Path
 
@@ -47,12 +48,7 @@ def _build_runtime_guardrails(agent_config: object | None) -> AgentGuardrails:
         filesystem_scope=getattr(guardrails, "filesystem_scope", "/") or "/",
         shell_blacklist=list(getattr(guardrails, "shell_blacklist", []) or []),
         network_enabled=bool(getattr(guardrails, "network_enabled", True)),
-        human_approval=bool(getattr(guardrails, "human_approval", False)),
-        tool_permission_mode=str(getattr(guardrails, "tool_permission_mode", "accept_edits") or "accept_edits"),
-        tool_permission_profile=str(
-            getattr(guardrails, "tool_permission_profile", "")
-            or _profile_from_legacy_tool_mode(getattr(guardrails, "tool_permission_mode", "accept_edits"))
-        ),
+        operation_scope=str(getattr(guardrails, "operation_scope", "normal") or "normal"),
         execution_backend=str(getattr(guardrails, "execution_backend", "local") or "local"),
         docker_image=str(getattr(guardrails, "docker_image", "python:3.11-slim") or "python:3.11-slim"),
         persistent_sandbox=bool(getattr(guardrails, "persistent_sandbox", False)),
@@ -62,9 +58,7 @@ def _build_runtime_guardrails(agent_config: object | None) -> AgentGuardrails:
         filesystem_scope=runtime_guardrails.filesystem_scope,
         shell_blacklist=runtime_guardrails.shell_blacklist,
         network_enabled=runtime_guardrails.network_enabled,
-        human_approval=runtime_guardrails.human_approval,
-        tool_permission_mode=runtime_guardrails.tool_permission_mode,
-        tool_permission_profile=runtime_guardrails.tool_permission_profile,
+        operation_scope=runtime_guardrails.operation_scope,
         execution_backend=runtime_guardrails.execution_backend,
         docker_image=runtime_guardrails.docker_image,
         persistent_sandbox=runtime_guardrails.persistent_sandbox,
@@ -77,14 +71,10 @@ def scope_guardrails_to_project(
     guardrails: AgentGuardrails,
     project_root: Path,
 ) -> AgentGuardrails:
-    """计算 Agent 文件范围与 Project root 的交集。"""
+    """计算 Agent 文件范围与 Project 主目录的交集。"""
 
     project_path = project_root.expanduser().resolve()
-    agent_path = Path(guardrails.filesystem_scope).expanduser().resolve()
-    # 安装包升级后，历史 Agent 可能仍保存旧 userData 下的 workspace。
-    # 该目录已不存在时按当前 Project root 迁移，避免旧路径导致整轮对话被拒绝。
-    if not agent_path.is_dir() and _is_legacy_desktop_scope(agent_path, project_path):
-        agent_path = project_path
+    agent_path = _agent_scope_path(guardrails, project_path)
     if project_path.is_relative_to(agent_path):
         effective_scope = project_path
     elif agent_path.is_relative_to(project_path):
@@ -93,23 +83,46 @@ def scope_guardrails_to_project(
         raise ValueError(
             f"Agent filesystem scope {agent_path} 与 Project root {project_path} 不相交。",
         )
+    return _copy_guardrails(guardrails, str(effective_scope))
+
+
+def directory_scope_for_run(guardrails: AgentGuardrails, context) -> tuple[AgentGuardrails, list[str]]:
+    """文件范围 = Project folders ∩ Agent scope。额外目录留给 Read，写范围另判。"""
+
+    from src.project_resources import DirectoryGrantError, grant_roots
+
+    agent_path = _agent_scope_path(guardrails, context.project_root)
+    try:
+        readable, writable = grant_roots(context, agent_path)
+    except DirectoryGrantError as exc:
+        raise ValueError(str(exc)) from exc
+    primary = writable[0] if writable else readable[0]
+    extras = [str(path) for path in readable if os.path.realpath(path) != os.path.realpath(primary)]
+    return _copy_guardrails(guardrails, str(primary)), extras
+
+
+def _agent_scope_path(guardrails: AgentGuardrails, project_root: Path) -> Path:
+    """历史桌面安装目录不存在时，改用当前 Project 主目录。"""
+
+    project_path = project_root.expanduser().resolve()
+    agent_path = Path(guardrails.filesystem_scope).expanduser().resolve()
+    if not agent_path.is_dir() and _is_legacy_desktop_scope(agent_path, project_path):
+        return project_path
+    return agent_path
+
+
+def _copy_guardrails(guardrails: AgentGuardrails, filesystem_scope: str) -> AgentGuardrails:
     return AgentGuardrails(
-        filesystem_scope=str(effective_scope),
+        filesystem_scope=filesystem_scope,
         shell_blacklist=guardrails.shell_blacklist,
         network_enabled=guardrails.network_enabled,
-        human_approval=guardrails.human_approval,
-        tool_permission_mode=guardrails.tool_permission_mode,
-        tool_permission_profile=guardrails.tool_permission_profile,
+        operation_scope=guardrails.operation_scope,
         execution_backend=guardrails.execution_backend,
         docker_image=guardrails.docker_image,
         persistent_sandbox=guardrails.persistent_sandbox,
         timeout_seconds=guardrails.timeout_seconds,
         permission_profile=guardrails.permission_profile,
     )
-    from src.tenancy.capabilities import coerce_hosted_guardrails
-
-    coerced = coerce_hosted_guardrails(runtime_guardrails)
-    return coerced if coerced is not None else runtime_guardrails
 
 
 def _is_legacy_desktop_scope(agent_path: Path, project_path: Path) -> bool:
@@ -119,15 +132,6 @@ def _is_legacy_desktop_scope(agent_path: Path, project_path: Path) -> bool:
         return False
     legacy_markers = ("agent-workstation-desktop", ".agent-workstation")
     return any(marker in str(agent_path).lower() for marker in legacy_markers)
-
-
-def _profile_from_legacy_tool_mode(mode: object) -> str:
-    value = str(mode or "accept_edits").strip().lower()
-    if value == "ask_every_time":
-        return "ask_every_time"
-    if value == "bypass":
-        return "trusted_tools"
-    return "confirm_destructive"
 
 
 def _permission_mode_for_guardrails(guardrails: AgentGuardrails) -> PermissionMode:
@@ -140,8 +144,7 @@ def _guardrail_cache_key(guardrails: AgentGuardrails) -> str:
     return (
         f"{guardrails.permission_profile.cache_key()}:"
         f"scope-{guardrails.filesystem_scope}:"
-        f"legacy-mode-{guardrails.tool_permission_mode}:"
-        f"legacy-profile-{guardrails.tool_permission_profile}:"
+        f"operation-{guardrails.operation_scope}:"
         f"exec-{guardrails.execution_backend}:"
         f"docker-{guardrails.docker_image}:"
         f"persist-sandbox-{guardrails.persistent_sandbox}"

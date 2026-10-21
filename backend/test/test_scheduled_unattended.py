@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,12 +32,10 @@ from src.server.routes.skills import Skill
 from src.storage import database
 from src.storage.database import (
     DEFAULT_PROJECT_ID,
-    DEFAULT_WORKSPACE_ID,
     create_project,
     ensure_db,
     replace_skills,
     upsert_agent,
-    upsert_project_resource_binding,
 )
 
 
@@ -65,7 +64,6 @@ def _ensure_agent(agent_id: str) -> None:
         "id": agent_id,
         "name": agent_id,
         "system_prompt": "prompt",
-        "workspaceId": DEFAULT_WORKSPACE_ID,
         "status": "idle",
     })
 
@@ -82,21 +80,13 @@ def _ensure_skill(skill_id: str, *, resource_path: str = "") -> None:
             "resourcePath": resource_path,
             "resources": ["scripts/"] if resource_path else [],
             "updatedAt": "2026-08-20T00:00:00+00:00",
-            "workspaceId": DEFAULT_WORKSPACE_ID,
         },
-    })
-    upsert_project_resource_binding({
-        "project_id": DEFAULT_PROJECT_ID,
-        "resource_type": "skill",
-        "resource_id": skill_id,
-        "enabled": True,
     })
 
 
 def _weekly_job(service: ScheduledJobService, **overrides):
     payload = {
-        "workspace_id": DEFAULT_WORKSPACE_ID,
-        "project_id": DEFAULT_PROJECT_ID,
+        "project_slug": DEFAULT_PROJECT_ID,
         "name": "周五周报",
         "agent_id": "agent-1",
         "schedule_kind": "weekly",
@@ -138,8 +128,7 @@ def _agent_ctx(*, trigger_source: str, project_root: Path):
         intent_route=SimpleNamespace(executor=SimpleNamespace(kind="single_agent")),
         runtime_context=SimpleNamespace(
             project_root=project_root,
-            workspace_id=DEFAULT_WORKSPACE_ID,
-            project_id=DEFAULT_PROJECT_ID,
+            project_slug=DEFAULT_PROJECT_ID,
         ),
         runtime_model_config=SimpleNamespace(
             model_name="model",
@@ -259,6 +248,26 @@ def test_same_agent_interactive_then_firing_drops_askuser_and_delegate_task(monk
     assert Path(read.scope_dir).resolve() == project_root.resolve()
 
 
+def test_unattended_manual_allows_contract_tools_and_cwd_write(tmp_path):
+    workspace = tmp_path / "cwd"
+    workspace.mkdir()
+    denied, resume = hitl_unattended_resolve(
+        "REQUIRE_USER_CONFIRM",
+        {
+            "reply_id": "reply-1",
+            "tool_calls": [
+                {"id": "call-http", "name": "HttpRequest", "input": '{"url":"https://example.com"}'},
+                {"id": "call-write", "name": "Write", "input": '{"file_path":"outputs/a.md"}'},
+                {"id": "call-bash", "name": "Bash", "input": '{"command":"ls"}'},
+            ],
+        },
+        workspace_dir=str(workspace),
+        approval_mode="manual",
+    )
+    assert denied == ["Bash"]
+    assert [item.confirmed for item in resume.confirm_results] == [True, True, False]
+
+
 def test_unattended_write_is_not_team_deny_only(tmp_path):
     """scheduled Leader 批准 cwd Write；Team Member helper 仍是否认。"""
 
@@ -328,10 +337,7 @@ def test_ask_every_time_cwd_write_succeeds_on_scheduled_firing(tmp_path):
                 agent_id="agent-ask",
                 agent_name="Ask Agent",
                 model_name="deepseek-chat",
-                guardrails=AgentGuardrails(
-                    tool_permission_profile="ask_every_time",
-                    tool_permission_mode="ask_every_time",
-                ),
+                guardrails=AgentGuardrails(),
                 message="生成本周周报",
                 stream_scope="single_agent",
                 skill_runs=[],
@@ -383,8 +389,8 @@ def test_unattended_deny_limit_fails_without_pending(tmp_path):
 
     asyncio.run(run_case())
     try:
-        assert state.stop_reason == "job_needs_human"
-        assert state.unattended_denials >= 1
+        assert state.stop_reason == "hitl_denied"
+        assert state.unattended_denials > 8
         assert PENDING_INTERACTIONS == {}
     finally:
         PENDING_INTERACTIONS.clear()
@@ -441,14 +447,14 @@ def test_build_scheduled_run_context_skips_model_readiness_and_tool_scope_resolv
             model_config_data=None,
             mcp_tools=[],
             knowledge_tools=[],
-            guardrails=SimpleNamespace(filesystem_scope=project["rootPath"]),
+            guardrails=SimpleNamespace(filesystem_scope=project["primaryPath"]),
         ),
     )
-    workspace = project_job_run_directory(Path(project["rootPath"]), "job-ctx", "firing-ctx")
+    workspace = project_job_run_directory(Path(project["primaryPath"]), "job-ctx", "firing-ctx")
     from src.runtime_context import resolve_runtime_context
 
     runtime_context = resolve_runtime_context(
-        project_id=project["id"],
+        project_slug=project["slug"],
         session_id="sched-ctx",
         run_id="run-ctx",
         agent_id="default",
@@ -458,7 +464,7 @@ def test_build_scheduled_run_context_skips_model_readiness_and_tool_scope_resolv
         _firing_ns(id="firing-ctx", job_id="job-ctx"),
         run_data=ChatMessage(
             session_id="sched-ctx",
-            project_id=project["id"],
+            project_slug=project["slug"],
             message="生成本周周报，写入 outputs/weekly-report.md",
             agent_id="default",
             skill_ids=[],
@@ -477,23 +483,24 @@ def test_build_scheduled_run_context_skips_model_readiness_and_tool_scope_resolv
     assert ctx.readiness.source == "scheduled_job"
 
 
-def test_frozen_skills_must_equal_used_skills_or_skill_unbound(isolated_db, tmp_path, monkeypatch):
+def test_frozen_record_loads_skill_and_hash_change_stops_the_run(isolated_db, tmp_path, monkeypatch):
     project = _prepare_project(tmp_path)
-    installed = {
-        "skill-ok": Skill.model_validate({
-            "id": "skill-ok",
-            "name": "ok",
-            "description": "",
-            "category": "test",
-            "status": "installed",
-            "enabled": True,
-            "updatedAt": "2026-08-21T00:00:00+00:00",
-        }),
-    }
-    monkeypatch.setattr(
-        "src.server.routes.chat.run_context.get_installed_skill",
-        lambda skill_id: installed.get(skill_id),
+    skill_md = tmp_path / "skill-ok" / "SKILL.md"
+    skill_md.parent.mkdir()
+    skill_md.write_text(
+        "---\nname: 证书核对\ndescription: 核对证书\n---\n\n原始步骤\n",
+        encoding="utf-8",
     )
+    digest = hashlib.sha256(skill_md.read_bytes()).hexdigest()
+    frozen = [{
+        "id": "skill-ok",
+        "name": "ok",
+        "source_scope": "project",
+        "source_path": str(skill_md),
+        "content_sha256": digest,
+        "frozen_at": "2026-10-21T00:00:00+00:00",
+        "origin": "explicit",
+    }]
     monkeypatch.setattr(
         "src.server.routes.chat.run_context.get_effective_model_settings",
         lambda: SimpleNamespace(default_model="model", fallback_models=[], provider="deepseek", api_key="x"),
@@ -515,35 +522,58 @@ def test_frozen_skills_must_equal_used_skills_or_skill_unbound(isolated_db, tmp_
             model_config_data=None,
             mcp_tools=[],
             knowledge_tools=[],
-            guardrails=SimpleNamespace(filesystem_scope=project["rootPath"]),
+            guardrails=SimpleNamespace(filesystem_scope=project["primaryPath"]),
         ),
     )
     from src.runtime_context import resolve_runtime_context
 
-    workspace = project_job_run_directory(Path(project["rootPath"]), "job-skill", "firing-skill")
+    workspace = project_job_run_directory(Path(project["primaryPath"]), "job-skill", "firing-skill")
     runtime_context = resolve_runtime_context(
-        project_id=project["id"],
+        project_slug=project["slug"],
         session_id="sched-skill",
         run_id="run-skill",
         agent_id="default",
     )
-    with pytest.raises(ValueError, match="skill_unbound"):
+    ctx = asyncio.run(build_scheduled_run_context(
+        _job_ns(id="job-skill", required_skills=frozen, context_policy="fresh"),
+        _firing_ns(id="firing-skill", job_id="job-skill"),
+        run_data=ChatMessage(
+            session_id="sched-skill",
+            project_slug=project["slug"],
+            message="使用技能",
+            agent_id="default",
+            skill_ids=[],
+        ),
+        runtime_context=runtime_context,
+        session_workspace_dir=str(workspace),
+    ))
+    assert [skill.id for skill in ctx.used_skills] == ["skill-ok"]
+    assert ctx.used_skills[0].name == "证书核对"
+    assert ctx.skill_loading_mode == "scheduled_preloaded"
+    assert "证书核对" in ctx.system_prompt
+    assert "原始步骤" not in ctx.system_prompt
+    assert "call the Skill tool" not in ctx.system_prompt
+    assert "with the Skill tool" not in ctx.system_prompt
+    assert str(skill_md.parent) in ctx.extra_filesystem_scopes
+    skill_md.write_text("改过的步骤\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="skill_hash_changed"):
         asyncio.run(build_scheduled_run_context(
-            _job_ns(id="job-skill", skill_ids=["skill-ok", "skill-missing"]),
+            _job_ns(id="job-skill", required_skills=frozen, context_policy="fresh"),
             _firing_ns(id="firing-skill", job_id="job-skill"),
             run_data=ChatMessage(
                 session_id="sched-skill",
-                project_id=project["id"],
+                project_slug=project["slug"],
                 message="使用技能",
                 agent_id="default",
-                skill_ids=["skill-ok", "skill-missing"],
+                skill_ids=[],
             ),
             runtime_context=runtime_context,
             session_workspace_dir=str(workspace),
         ))
 
 
-def test_confirm_scripts_skill_requires_trusted_tools(isolated_db, tmp_path, monkeypatch):
+def test_confirm_scripts_skill_does_not_ask_for_approval(isolated_db, tmp_path, monkeypatch):
+    """定时任务无需确认。带 scripts/ 的任务可以启用，硬底线留到执行时拒绝。"""
     service = _service()
     skill_dir = tmp_path / "skill-pack"
     (skill_dir / "scripts").mkdir(parents=True)
@@ -573,28 +603,22 @@ def test_confirm_scripts_skill_requires_trusted_tools(isolated_db, tmp_path, mon
             ),
         ),
     )
-    with pytest.raises(ScheduledJobValidationError, match="would_fail_tools: Bash"):
-        service.confirm(job.id)
-
-    monkeypatch.setattr(
-        "src.server.routes.agents.get_registered_agent",
-        lambda agent_id: SimpleNamespace(
-            skills=["skill-scripts"],
-            guardrails=SimpleNamespace(
-                tool_permission_profile="trusted_tools",
-                tool_permission_mode="bypass",
-            ),
-        ),
-    )
     confirmed = service.confirm(job.id)
     assert confirmed.status == "active"
-    assert confirmed.tool_scope.allow_bash is True
+    assert would_fail_unattended_tools(
+        tool_scope=JobToolScope(allow_bash=True),
+        agent=SimpleNamespace(guardrails=SimpleNamespace(
+            tool_permission_profile="trusted_tools",
+            tool_permission_mode="bypass",
+        )),
+        approval_mode="full_access",
+    ) == []
 
 
-def test_confirm_trusted_tools_with_human_approval_cannot_activate_scripts_job(
+def test_confirm_scripts_job_ignores_agent_human_approval(
     isolated_db, tmp_path, monkeypatch,
 ):
-    """trusted_tools + human_approval 仍是 AgentScope DEFAULT，Bash 会被 overlay 拒绝。"""
+    """Agent 档案上的人工审批不参与定时确认。"""
 
     service = _service()
     skill_dir = tmp_path / "skill-pack-hitl"
@@ -626,8 +650,8 @@ def test_confirm_trusted_tools_with_human_approval_cannot_activate_scripts_job(
             ),
         ),
     )
-    with pytest.raises(ScheduledJobValidationError, match="would_fail_tools: Bash"):
-        service.confirm(job.id)
+    confirmed = service.confirm(job.id)
+    assert confirmed.status == "active"
     assert would_fail_unattended_tools(
         tool_scope=JobToolScope(allow_bash=True),
         agent=SimpleNamespace(guardrails=SimpleNamespace(
@@ -635,7 +659,8 @@ def test_confirm_trusted_tools_with_human_approval_cannot_activate_scripts_job(
             tool_permission_mode="bypass",
             human_approval=True,
         )),
-    ) == ["Bash"]
+        approval_mode="full_access",
+    ) == []
 
 
 def test_confirm_ask_every_time_markdown_job_allows_cwd_write(isolated_db, monkeypatch):
@@ -708,10 +733,8 @@ def _prepare_project(tmp_path) -> dict:
     root = tmp_path / "job-project"
     root.mkdir()
     return create_project({
-        "id": "proj-unattended",
-        "workspace_id": DEFAULT_WORKSPACE_ID,
         "name": "无人值守项目",
-        "root_path": str(root),
+        "primaryPath": str(root),
     })
 
 

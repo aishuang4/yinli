@@ -128,11 +128,11 @@ class GroupStudioRecordStore:
         with self.lock, self.connect() as conn:
             rows = conn.execute(
                 f"""
-                SELECT s.id, s.title, s.status, s.project_id, s.workspace_id,
+                SELECT s.id, s.title, s.status, s.project_slug,
                        s.chat_session_id, s.updated_at
                 FROM group_studios s
                 JOIN group_task_cards t ON t.id = s.current_task_card_id
-                WHERE s.project_id = ? AND s.status != 'deleted'
+                WHERE s.project_slug = ? AND s.status != 'deleted'
                 ORDER BY CASE WHEN s.status IN ('done', 'archived', 'failed') THEN 1 ELSE 0 END,
                          s.updated_at DESC
                 """,
@@ -143,8 +143,7 @@ class GroupStudioRecordStore:
                 "id": str(row["id"]),
                 "title": str(row["title"] or "未命名工作室"),
                 "status": normalize_studio_status(str(row["status"])),
-                "projectId": str(row["project_id"]),
-                "workspaceId": str(row["workspace_id"]),
+                "projectSlug": str(row["project_slug"]),
                 "chatSessionId": str(row["chat_session_id"]),
                 "updatedAt": str(row["updated_at"]),
             }
@@ -161,7 +160,7 @@ class GroupStudioRecordStore:
                 SELECT s.id
                 FROM group_studios s
                 JOIN group_task_cards t ON t.id = s.current_task_card_id
-                WHERE s.project_id = ? AND {self._BLANK_DRAFT_SQL}
+                WHERE s.project_slug = ? AND {self._BLANK_DRAFT_SQL}
                 ORDER BY s.updated_at DESC
                 LIMIT 1
                 """,
@@ -239,8 +238,7 @@ class GroupStudioRecordStore:
         ]
         snapshot = {
             "id": studio["id"],
-            "projectId": studio["project_id"],
-            "workspaceId": studio["workspace_id"],
+            "projectSlug": studio["project_slug"],
             "chatSessionId": studio["chat_session_id"],
             "title": studio["title"],
             "modelConfigId": studio["model_config_id"],
@@ -424,42 +422,6 @@ class GroupStudioRecordStore:
                     (status, now, group_id, member_id),
                 )
         return self.get_member(group_id, member_id)
-
-    def migrate_legacy_v2(self) -> int:
-        """一次性把旧阶段机收成 open/paused/done，并移出 Host 席位。"""
-
-        self.ensure_db()
-        changed = 0
-        with self.lock, self.connect() as conn:
-            rows = conn.execute("SELECT id, status FROM group_studios").fetchall()
-            now = self.utc_now()
-            for row in rows:
-                nxt = normalize_studio_status(str(row["status"]))
-                if nxt != str(row["status"]):
-                    pause = "circuit" if str(row["status"]) == "circuit_broken" else None
-                    if nxt == "paused" and str(row["status"]) == "paused":
-                        pause = "user"
-                    conn.execute(
-                        """
-                        UPDATE group_studios
-                        SET status = ?, phase_before_pause = COALESCE(?, phase_before_pause),
-                            awaiting_intake_confirm = 0, awaiting_restatement = 0,
-                            claim_round_json = '[]', updated_at = ?
-                        WHERE id = ?
-                        """,
-                        (nxt, pause, now, row["id"]),
-                    )
-                    changed += 1
-                host_rows = conn.execute(
-                    """
-                    UPDATE group_memberships
-                    SET status = 'removed', updated_at = ?
-                    WHERE group_id = ? AND role = 'host' AND status != 'removed'
-                    """,
-                    (now, row["id"]),
-                )
-                changed += int(host_rows.rowcount or 0)
-        return changed
 
     def set_member_muted(self, group_id: str, member_id: str, muted: bool) -> dict[str, Any] | None:
         self.ensure_db()
@@ -1313,7 +1275,7 @@ class GroupStudioRecordStore:
         with self.lock, self.connect() as conn:
             rows = conn.execute(
                 """
-                SELECT id, status, current_run_id, workspace_id, project_id,
+                SELECT id, status, current_run_id, project_slug,
                        chat_session_id, title
                 FROM group_studios
                 WHERE current_run_id != ''
@@ -1325,8 +1287,7 @@ class GroupStudioRecordStore:
                 "id": str(row["id"]),
                 "status": str(row["status"]),
                 "currentRunId": str(row["current_run_id"] or ""),
-                "workspaceId": str(row["workspace_id"]),
-                "projectId": str(row["project_id"]),
+                "projectSlug": str(row["project_slug"]),
                 "chatSessionId": str(row["chat_session_id"]),
                 "title": str(row["title"]),
             }
@@ -1409,18 +1370,17 @@ class GroupStudioRecordStore:
         conn.execute(
             """
             INSERT INTO group_studios (
-                id, workspace_id, project_id, chat_session_id, title, status,
+                id, project_slug, chat_session_id, title, status,
                 phase_before_pause, current_task_card_id, awaiting_restatement,
                 awaiting_intake_confirm,
                 orchestrator_meta, budget_json, current_run_id,
                 pending_speaker_member_id, speaker_queue_json, claim_round_json,
                 created_at, updated_at, archived_at, model_config_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 group_id,
-                payload["workspaceId"],
-                payload["projectId"],
+                str(payload.get("projectSlug") or payload.get("project_slug") or "default"),
                 payload["chatSessionId"],
                 payload["title"],
                 payload["status"],

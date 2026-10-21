@@ -8,7 +8,7 @@ from typing import Any
 
 
 class ResourceCatalogRecordStore:
-    """封装 Workspace 级持久资源目录的读写。"""
+    """封装 Agent、MCP 与 HTTP Tool 目录的读写。"""
 
     def __init__(
         self,
@@ -23,7 +23,6 @@ class ResourceCatalogRecordStore:
         default_model_config: Mapping[str, Any],
         default_plan_config: Mapping[str, Any],
         default_guardrails: Mapping[str, Any],
-        default_workspace_id: str,
     ) -> None:
         self.ensure_db = ensure_db
         self.connect = connect
@@ -35,7 +34,6 @@ class ResourceCatalogRecordStore:
         self.default_model_config = default_model_config
         self.default_plan_config = default_plan_config
         self.default_guardrails = default_guardrails
-        self.default_workspace_id = default_workspace_id
 
     def list_agents(self) -> list[dict[str, Any]]:
         self.ensure_db()
@@ -72,7 +70,6 @@ class ResourceCatalogRecordStore:
                     else self.default_guardrails
                 ),
                 "status": row["status"],
-                "workspaceId": row["workspace_id"],
                 "role": row["role"] if "role" in row.keys() else "chat",
                 "jobToolkit": self.loads(row["job_toolkit"], {}) if "job_toolkit" in row.keys() else {},
                 "created_at": row["created_at"],
@@ -86,13 +83,13 @@ class ResourceCatalogRecordStore:
         column_names = [
             "id", "name", "avatar", "description", "system_prompt", "model_config",
             "mcp_tools", "knowledge_tools", "skills", "tags", "plan_config",
-            "guardrails", "status", "created_at", "updated_at", "workspace_id",
+            "guardrails", "status", "created_at", "updated_at",
             "role", "job_toolkit",
         ]
         update_columns = [
             "name", "avatar", "description", "system_prompt", "model_config",
             "mcp_tools", "knowledge_tools", "skills", "tags", "plan_config",
-            "guardrails", "status", "updated_at", "workspace_id",
+            "guardrails", "status", "updated_at",
             "role", "job_toolkit",
         ]
         values = [
@@ -104,7 +101,6 @@ class ResourceCatalogRecordStore:
             self.dumps(data.get("planConfig", self.default_plan_config)),
             self.dumps(data.get("guardrails", {})), data.get("status", "idle"),
             data.get("created_at") or self.utc_now(), data.get("updated_at") or self.utc_now(),
-            data.get("workspaceId", self.default_workspace_id),
             data.get("role") or "chat",
             self.dumps(data.get("jobToolkit") or data.get("job_toolkit") or {}),
         ]
@@ -146,7 +142,7 @@ class ResourceCatalogRecordStore:
                 "headers": self.loads(row["headers"], {}), "tags": self.loads(row["tags"], []),
                 "tools": self.loads(row["tools"], []), "status": row["status"],
                 "enabled": bool(row["enabled"]), "installedAt": row["installed_at"],
-                "updatedAt": row["updated_at"], "workspaceId": row["workspace_id"],
+                "updatedAt": row["updated_at"],
             }
             for row in rows
         ]
@@ -159,8 +155,8 @@ class ResourceCatalogRecordStore:
                 """
                 INSERT INTO mcp_servers (
                     id, name, description, category, transport, command, url, homepage,
-                    headers, tags, tools, status, enabled, installed_at, updated_at, workspace_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    headers, tags, tools, status, enabled, installed_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -171,7 +167,6 @@ class ResourceCatalogRecordStore:
                         self.dumps(data.get("tools", [])), data.get("status", "available"),
                         int(bool(data.get("enabled", False))), data.get("installedAt"),
                         data.get("updatedAt") or self.utc_now(),
-                        data.get("workspaceId", self.default_workspace_id),
                     )
                     for data in records.values()
                 ],
@@ -195,7 +190,7 @@ class ResourceCatalogRecordStore:
                 "responseMode": row["response_mode"], "responsePath": row["response_path"],
                 "readonly": bool(row["readonly"]), "approvalPolicy": row["approval_policy"],
                 "enabled": bool(row["enabled"]), "createdAt": row["created_at"],
-                "updatedAt": row["updated_at"], "workspaceId": row["workspace_id"],
+                "updatedAt": row["updated_at"],
             }
             for row in rows
         ]
@@ -213,8 +208,8 @@ class ResourceCatalogRecordStore:
                     auth_config, headers, query_template, body_template,
                     parameter_schema, parameter_instructions, response_mode,
                     response_path, readonly, approval_policy, enabled,
-                    created_at, updated_at, workspace_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     name=excluded.name, description=excluded.description,
                     category=excluded.category, method=excluded.method, url=excluded.url,
@@ -236,7 +231,7 @@ class ResourceCatalogRecordStore:
                     data.get("parameterInstructions", ""), data.get("responseMode", "full"),
                     data.get("responsePath", ""), 1 if data.get("readonly", True) else 0,
                     data.get("approvalPolicy", "inherit"), 1 if data.get("enabled", True) else 0,
-                    created_at, updated_at, data.get("workspaceId", self.default_workspace_id),
+                    created_at, updated_at,
                 ),
             )
             conn.commit()

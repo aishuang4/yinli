@@ -18,14 +18,14 @@ def confirm_intake_for_tests(
 
     if goal is not None:
         put = client.put(f"/api/group-studio/{group_id}/task-card", json={
-            "projectId": project_id,
+            "projectSlug": project_id,
             "goal": goal,
         })
         assert put.status_code == 200, put.text
     update_group_studio_state(group_id, awaiting_intake_confirm=True)
     response = client.post(
         f"/api/group-studio/{group_id}/confirm-intake",
-        json={"projectId": project_id},
+        json={"projectSlug": project_id},
     )
     assert response.status_code == 200, response.text
     return response.json()

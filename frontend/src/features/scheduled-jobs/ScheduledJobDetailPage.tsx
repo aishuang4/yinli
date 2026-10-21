@@ -2,7 +2,7 @@
  * ScheduledJobDetailPage — 定时任务二级详情：规格、weekly 调度、历史与产物。
  */
 
-import { CalendarClock, FolderOpen, Pause, Play, Trash2 } from 'lucide-react';
+import { CalendarClock, FolderOpen, Pause, Pencil, Play, Trash2 } from 'lucide-react';
 import { Button, Tag } from '@/components/design';
 import { SelectField } from '../../components/form';
 import { WorkbenchDetailShell, WorkbenchListIcon, WorkbenchSection } from '../../components/workbench';
@@ -33,6 +33,7 @@ interface ScheduledJobDetailPageProps {
   canOpenDirectory: boolean;
   projectRoot: string;
   onBack: () => void;
+  onEdit: () => void;
   onConfirm: () => void;
   onPause: () => void;
   onResume: () => void;
@@ -56,6 +57,7 @@ export function ScheduledJobDetailPage({
   canOpenDirectory,
   projectRoot,
   onBack,
+  onEdit,
   onConfirm,
   onPause,
   onResume,
@@ -77,6 +79,11 @@ export function ScheduledJobDetailPage({
       onBack={onBack}
       actions={(
         <>
+          {writable ? (
+            <Button size="small" icon={<Pencil size={13} />} disabled={busy} onClick={onEdit}>
+              编辑
+            </Button>
+          ) : null}
           {job.status === 'pending_confirmation' ? (
             <Button size="small" type="primary" loading={busy} disabled={!writable} onClick={onConfirm}>
               确认启用
@@ -168,7 +175,7 @@ export function ScheduledJobDetailPage({
           <section className="rounded-xl bg-[var(--color-bg-primary)] p-4">
             <div className="mb-1 text-sm font-semibold text-[var(--color-text-primary)]">冻结提示词</div>
             <div className="mb-3 text-xs text-[var(--color-text-tertiary)]">
-              定义权威是 Markdown 文件。改提示词、Agent 或策略请 Edit 定义文件，下一轮列表会读文件。
+              保存后写回定义文件。改提示词或执行者后，已启用的任务会回到待确认。
             </div>
             <pre className="max-h-[240px] overflow-auto whitespace-pre-wrap rounded-md bg-[var(--color-bg-secondary)] px-3 py-2 text-xs leading-6 text-[var(--color-text-primary)]">
               {job.frozenPrompt || '未配置'}
@@ -176,21 +183,11 @@ export function ScheduledJobDetailPage({
           </section>
 
           <section className="rounded-xl bg-[var(--color-bg-primary)] p-4">
-            <div className="mb-3 text-sm font-semibold text-[var(--color-text-primary)]">工具范围</div>
-            <div className="flex flex-wrap gap-2">
-              {Object.entries(job.toolScope).map(([key, enabled]) => (
-                <Tag key={key} size="small" color={enabled ? 'green' : 'transparent'}>
-                  {key} {enabled ? '开' : '关'}
-                </Tag>
-              ))}
+            <div className="mb-1 text-sm font-semibold text-[var(--color-text-primary)]">Skill</div>
+            <div className="mb-3 text-xs text-[var(--color-text-tertiary)]">
+              编辑里可以增加或删除。已启用的任务改完会回到待确认，确认启用后重新冻结。
             </div>
-            {job.skillIds.length > 0 ? (
-              <div className="mt-3 text-xs text-[var(--color-text-tertiary)]">
-                Skills：{job.skillIds.join('、')}
-              </div>
-            ) : (
-              <div className="mt-3 text-xs text-[var(--color-text-tertiary)]">未冻结 Skill</div>
-            )}
+            <JobSkillList job={job} />
           </section>
 
           <WorkbenchSection title="运行历史" compact>
@@ -210,6 +207,29 @@ export function ScheduledJobDetailPage({
         </div>
       </div>
     </WorkbenchDetailShell>
+  );
+}
+
+function JobSkillList({ job }: { job: ScheduledJob }) {
+  const frozenById = new Map(
+    (job.requiredSkills || []).filter((skill) => skill.id).map((skill) => [skill.id, skill]),
+  );
+  const ids = [...(job.skillIds || [])];
+  if (ids.length === 0) {
+    return <div className="text-xs text-[var(--color-text-tertiary)]">未绑定 Skill</div>;
+  }
+  return (
+    <div className="flex flex-wrap gap-2">
+      {ids.map((id) => {
+        const frozen = frozenById.get(id);
+        return (
+          <Tag key={id} size="small" color={frozen ? 'green' : 'blue'}>
+            {frozen?.name && frozen.name !== id ? `${frozen.name} (${id})` : id}
+            {frozen ? ' · 已冻结' : ''}
+          </Tag>
+        );
+      })}
+    </div>
   );
 }
 

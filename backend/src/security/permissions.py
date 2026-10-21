@@ -1,7 +1,6 @@
 """统一资源权限模型。
 
-本模块把旧的 Agent guardrails 字段归一化为统一权限配置，供运行时、
-工具注入、AgentScope permission mode 和后续审计共用。
+Agent 档案只提供能力边界。工具放行由平台授权引擎决定，不读取旧审批档。
 """
 
 from dataclasses import dataclass, field
@@ -55,16 +54,11 @@ class ApprovalPolicy(StrEnum):
 
 @dataclass(frozen=True)
 class UnifiedPermissionProfile:
-    """运行期统一权限配置。
-
-    第一版保持与现有 guardrails 字段兼容，不改变前端保存结构。
-    后续可以把本结构直接持久化到权限表或策略表。
-    """
+    """运行期能力配置。审批不在这里决定。"""
 
     filesystem_scope: str = "/"
     network_enabled: bool = True
-    human_approval: bool = False
-    tool_policy: ApprovalPolicy = ApprovalPolicy.CONFIRM_DESTRUCTIVE
+    tool_policy: ApprovalPolicy = ApprovalPolicy.TRUSTED_TOOLS
     shell_blacklist: tuple[str, ...] = field(default_factory=lambda: ("rm -rf /", "sudo"))
     timeout_seconds: int = 300
     owner: str = "local-user"
@@ -107,36 +101,19 @@ class UnifiedPermissionProfile:
         if resource_type in {ResourceType.MCP, ResourceType.KNOWLEDGE_TOOL} and not self.can_use_network:
             return PermissionDecision.DENY
 
-        if self.human_approval or self.tool_policy == ApprovalPolicy.ASK_EVERY_TIME:
-            return PermissionDecision.ASK
-
-        if self.tool_policy == ApprovalPolicy.TRUSTED_TOOLS:
-            return PermissionDecision.ALLOW
-
-        if self.tool_policy == ApprovalPolicy.CONFIRM_DESTRUCTIVE and action in {
-            PermissionAction.WRITE,
-            PermissionAction.DELETE,
-            PermissionAction.EXECUTE,
-        }:
-            return PermissionDecision.ASK
-
         return PermissionDecision.ALLOW
 
     def to_agentscope_permission_mode(self) -> PermissionMode:
-        """映射到 AgentScope 当前支持的 permission mode。"""
+        """Agent 档案不再选择审批模式。平台授权引擎决定放行。"""
 
-        if self.human_approval or self.tool_policy == ApprovalPolicy.ASK_EVERY_TIME:
-            return PermissionMode.DEFAULT
-        if self.tool_policy in {ApprovalPolicy.TRUSTED_TOOLS, ApprovalPolicy.READ_ONLY}:
-            return PermissionMode.BYPASS
-        return PermissionMode.ACCEPT_EDITS
+        return PermissionMode.BYPASS
 
     def cache_key(self) -> str:
         """生成影响 Agent 运行时缓存的稳定 key。"""
 
         return (
             f"scope-{self.filesystem_scope}:net-{self.network_enabled}:"
-            f"hitl-{self.human_approval}:policy-{self.tool_policy.value}:"
+            f"policy-{self.tool_policy.value}:"
             f"timeout-{self.timeout_seconds}:blacklist-{','.join(self.shell_blacklist)}"
         )
 
@@ -146,7 +123,6 @@ class UnifiedPermissionProfile:
         return {
             "filesystemScope": self.filesystem_scope,
             "networkEnabled": self.network_enabled,
-            "humanApproval": self.human_approval,
             "toolPolicy": self.tool_policy.value,
             "timeoutSeconds": self.timeout_seconds,
             "owner": self.owner,
@@ -155,36 +131,19 @@ class UnifiedPermissionProfile:
         }
 
 
-def normalize_approval_policy(value: object, legacy_mode: object = None) -> ApprovalPolicy:
-    """把新旧权限字段归一化为统一审批策略。"""
-
-    normalized = str(value or "").strip().lower()
-    if normalized in {item.value for item in ApprovalPolicy}:
-        return ApprovalPolicy(normalized)
-
-    legacy = str(legacy_mode or "").strip().lower()
-    if legacy == "ask_every_time":
-        return ApprovalPolicy.ASK_EVERY_TIME
-    if legacy == "bypass":
-        return ApprovalPolicy.TRUSTED_TOOLS
-    return ApprovalPolicy.CONFIRM_DESTRUCTIVE
-
-
 def build_permission_profile(source: object | None) -> UnifiedPermissionProfile:
-    """从任意 guardrails-like 对象构建统一权限配置。"""
+    """从 guardrails 构建能力配置。旧审批档不参与，只读能力仍然收窄工具。"""
 
     if not source:
         return UnifiedPermissionProfile()
 
-    policy = normalize_approval_policy(
-        getattr(source, "tool_permission_profile", None),
-        getattr(source, "tool_permission_mode", None),
-    )
+    operation_scope = str(getattr(source, "operation_scope", "") or "").strip().lower()
+    legacy_profile = str(getattr(source, "tool_permission_profile", "") or "").strip().lower()
+    read_only = operation_scope == "read_only" or legacy_profile == "read_only"
     return UnifiedPermissionProfile(
         filesystem_scope=str(getattr(source, "filesystem_scope", "/") or "/"),
         network_enabled=bool(getattr(source, "network_enabled", True)),
-        human_approval=bool(getattr(source, "human_approval", False)),
-        tool_policy=policy,
+        tool_policy=ApprovalPolicy.READ_ONLY if read_only else ApprovalPolicy.TRUSTED_TOOLS,
         shell_blacklist=tuple(
             str(item).strip()
             for item in list(getattr(source, "shell_blacklist", []) or [])
@@ -195,13 +154,3 @@ def build_permission_profile(source: object | None) -> UnifiedPermissionProfile:
         workspace=str(getattr(source, "workspace", "default") or "default"),
         role=str(getattr(source, "role", "owner") or "owner"),
     )
-
-
-def legacy_mode_from_policy(policy: ApprovalPolicy) -> str:
-    """给旧 AgentScope/前端字段保留兼容值。"""
-
-    if policy == ApprovalPolicy.ASK_EVERY_TIME:
-        return "ask_every_time"
-    if policy in {ApprovalPolicy.TRUSTED_TOOLS, ApprovalPolicy.READ_ONLY}:
-        return "bypass"
-    return "accept_edits"

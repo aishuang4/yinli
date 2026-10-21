@@ -1,6 +1,6 @@
 """旧三层 Markdown 记忆的改写、候选和章节整理。
 
-Skill 自进化不在这里。编排入口仍是 reflection.reflect_completed_run_memory_with_agents。
+编排入口是 reflection.reflect_completed_run_memory_with_agents。
 """
 
 from __future__ import annotations
@@ -142,12 +142,12 @@ def _append_note(
         return None
     policy = get_memory_admission_policy()
     if scope == "global_preference":
-        doc = store.read_global_memory(item.workspace_id)
+        doc = store.read_global_memory()
         content = _insert_note_into_section(doc.content, section, note)
         if content == doc.content:
             return None
         content = _prepare_markdown_memory_content(content, policy=policy)
-        written = _write_with_retry(lambda value: store.write_global_memory(item.workspace_id, value), content, policy.markdown_write_retries)
+        written = _write_with_retry(store.write_global_memory, content, policy.markdown_write_retries)
     elif scope == "agent":
         doc = store.read_agent_memory(item.agent_id)
         content = _insert_note_into_section(doc.content, section, note)
@@ -308,8 +308,7 @@ def _enqueue_candidate(
             "confidence": confidence,
             "agentId": item.agent_id,
             "agentName": item.agent_name,
-            "workspaceId": item.workspace_id,
-            "projectId": item.project_id,
+            "project_slug": item.project_slug,
             "sourceSessionId": item.session_id,
             "sourceRunId": item.source_run_id,
         })
@@ -349,7 +348,7 @@ def _route_note(
 
 def _owner_id_for_scope(item: MemoryReflectionInput, scope: str) -> str:
     if scope == "global_preference":
-        return item.workspace_id
+        return "tenant"
     if scope == "agent":
         return item.agent_id
     return item.user_id
@@ -368,8 +367,7 @@ async def apply_markdown_candidate(record: dict, *, store: MarkdownMemoryStore |
         user_message="",
         assistant_text="",
         user_id=str(record.get("ownerId") or "default") if scope == "user" else "default",
-        workspace_id=str(record.get("ownerId") or "default") if scope == "global_preference" else str(record.get("workspaceId") or "default"),
-        project_id=str(record.get("projectId") or "default"),
+        project_slug=str(record.get("projectSlug") or record.get("project_slug") or "default"),
         source_run_id=str(record.get("sourceRunId") or ""),
     )
     memory_file = _build_memory_file_tool_set(store or MarkdownMemoryStore(), item, scope)  # type: ignore[arg-type]
@@ -393,13 +391,13 @@ def _build_memory_file_tool_set(
     scope: MemoryScope,
 ) -> MemoryFileToolSet:
     if scope == "global_preference":
-        doc = store.read_global_memory(item.workspace_id)
+        doc = store.read_global_memory()
 
         def read_content() -> str:
-            return store.read_global_memory(item.workspace_id).content
+            return store.read_global_memory().content
 
         def write_content(content: str) -> None:
-            store.write_global_memory(item.workspace_id, content)
+            store.write_global_memory(content)
 
     elif scope == "agent":
         doc = store.read_agent_memory(item.agent_id)

@@ -23,8 +23,8 @@ def serialize_notification(item: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "id": item["id"],
-        "workspaceId": item["workspace_id"],
-        "projectId": item["project_id"],
+        "tenantId": item.get("tenant_id") or item.get("tenantId") or "",
+        "projectSlug": item.get("project_slug") or item.get("projectSlug") or "",
         "jobId": item["job_id"],
         "firingId": item["firing_id"],
         "kind": item["kind"],
@@ -38,7 +38,7 @@ def serialize_notification(item: dict[str, Any]) -> dict[str, Any]:
 
 def list_notification_page(
     *,
-    project_id: str | None = None,
+    project_slug: str | None = None,
     unread_only: bool = False,
     limit: int = 50,
     before: str | None = None,
@@ -47,7 +47,7 @@ def list_notification_page(
 
     page_size = max(1, min(limit, 100))
     rows = list_user_notifications(
-        project_id=project_id,
+        project_slug=project_slug,
         unread_only=unread_only,
         limit=page_size + 1,
         before=before,
@@ -55,33 +55,33 @@ def list_notification_page(
     overflow = len(rows) > page_size
     items = rows[:page_size]
     next_before = items[-1]["created_at"] if overflow and items else None
-    unread = count_unread_user_notifications(project_id=project_id)
+    unread = count_unread_user_notifications(project_slug=project_slug)
     return items, unread, next_before
 
 
-def unread_count(*, project_id: str | None = None) -> int:
-    return count_unread_user_notifications(project_id=project_id)
+def unread_count(*, project_slug: str | None = None) -> int:
+    return count_unread_user_notifications(project_slug=project_slug)
 
 
 def mark_read(note_id: str) -> dict[str, Any]:
     record = mark_user_notification_read(note_id)
     if record is None:
         raise NotificationNotFoundError(f"找不到通知: {note_id}")
-    project_id = str(record.get("project_id") or "")
+    project_slug = str(record.get("project_slug") or "")
     notification_hub.publish({
         "type": "read",
-        "projectId": project_id,
-        "unreadCount": unread_count(project_id=project_id or None),
+        "projectSlug": project_slug,
+        "unreadCount": unread_count(project_slug=project_slug or None),
         "notification": serialize_notification(record),
     })
     return record
 
 
-def mark_all_read(*, project_id: str | None = None) -> int:
-    updated = mark_all_user_notifications_read(project_id=project_id)
+def mark_all_read(*, project_slug: str | None = None) -> int:
+    updated = mark_all_user_notifications_read(project_slug=project_slug)
     notification_hub.publish({
         "type": "read_all",
-        "projectId": project_id or "",
+        "projectSlug": project_slug or "",
         "unreadCount": 0,
         "updatedCount": updated,
     })

@@ -6,11 +6,11 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from src.config.runtime_settings import get_effective_model_settings
 from src.project_files import list_project_session_artifacts, project_session_directory
-from src.project_resources import ProjectResourceAccess, resolve_project_resource_access
+from src.project_resources import ProjectResourceAccess, load_project_access
 from src.runtime_context import RuntimeContext, load_project_instructions
 from src.server.routes.chat.runtime_governance import build_memory_prompt_and_recall
 from src.server.routes.agents import get_registered_agent
@@ -23,13 +23,20 @@ from src.server.routes.chat.intent_router import (
 )
 from src.server.routes.chat.models import ChatMessage, ChatSkillRun
 from src.agents.session_context import SessionHistoryMessage
+from src.skills.invocation import (
+    MAX_STACKED_SKILLS,
+    SkillInvocationError,
+    extract_inline_skill_commands,
+    load_skill_invocations,
+)
 from src.server.routes.chat.prompts import (
     _build_clarification_system_prompt,
     _build_file_attachments_user_note,
     _build_final_answer_system_prompt,
-    _build_forced_skills_user_note,
     _build_runtime_context_prompt,
+    _build_scheduled_preloaded_skill_prompt,
     _build_skill_context_prompt,
+    build_stacked_skill_user_message,
 )
 from src.server.routes.chat.store import message_model
 from src.storage.database import list_chat_messages
@@ -37,7 +44,7 @@ from src.server.routes.chat.runtime import (
     _build_runtime_guardrails,
     _build_runtime_knowledge_tools,
     _build_runtime_mcp_servers,
-    scope_guardrails_to_project,
+    directory_scope_for_run,
 )
 from src.server.routes.chat.readiness_gate import ReadinessDecision, check_message_readiness_with_model
 from src.server.routes.chat.runtime_builder import (
@@ -113,8 +120,12 @@ class ChatRunContext:
     # 单独保留是给 Team Leader / 综合阶段复用，不必再算一次。
     memory_prompt: str = ""
     memory_recall_text: str = ""
-    # 本轮用户在发送框强制开启的 Skill；已并入 used_skills，单独保留供预启用。
+    # 本轮用户在发送框强制开启的 Skill；已并入 used_skills。
     forced_skills: list[Skill] = field(default_factory=list)
+    # 选中 Skill 的总头 + 全文。非空时它就是发给模型的那条用户消息。
+    forced_skill_message: str = ""
+    # interactive_on_demand：Chat 按需讀 Skill。scheduled_preloaded：全文先進上下文，不註冊 Skill viewer。
+    skill_loading_mode: str = "interactive_on_demand"
     force_compress: bool = False
     platform_binding: object | None = None
     platform_denied: frozenset[str] = field(default_factory=frozenset)
@@ -187,34 +198,39 @@ def _session_approval_mode(session_id: str) -> str:
     return mode if mode in {"manual", "model_review", "full_access"} else "manual"
 
 
-def _job_approval_mode(job: object) -> str:
-    """Job 的审批模式只来自执行策略；没有策略时按人工处理。"""
-
-    import json
-
-    raw = getattr(job, "execution_policy", None)
-    if raw is None:
-        raw = getattr(job, "executionPolicy", None)
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw or "{}")
-        except json.JSONDecodeError:
-            raw = {}
-    mode = str((raw or {}).get("approvalMode") or "manual") if isinstance(raw, dict) else "manual"
-    return mode if mode in {"manual", "model_review", "full_access"} else "manual"
-
-
 def _require_job_approval_mode(job: object) -> str:
-    """model_review 不可用时直接失败，不把 Job 改成完全开放。"""
+    """定时任务无需确认。硬底线仍拒绝，不读任务上的人工或智能审核。"""
 
-    mode = _job_approval_mode(job)
-    if mode == "model_review":
-        from src.security.authorization.review_gate import permission_review_status
+    del job
+    return "full_access"
 
-        review = permission_review_status()
-        if not review["available"]:
-            raise ValueError(review["reason"] or "智能审核当前不可用，本次定时运行已结束。")
-    return mode
+
+async def build_run_context(
+    run_data: ChatMessage,
+    runtime_context: RuntimeContext,
+    *,
+    mode: Literal["interactive", "frozen"] = "interactive",
+    job: Any | None = None,
+    firing: Any | None = None,
+    session_workspace_dir: str | None = None,
+) -> ChatRunContext:
+    """交互式與定時 firing 共用入口。frozen 只讀確認時寫下的 Skill 記錄。"""
+
+    if mode == "frozen":
+        if job is None or firing is None:
+            raise ValueError("frozen 模式需要 job 與 firing")
+        return await build_scheduled_run_context(
+            job,
+            firing,
+            run_data=run_data,
+            runtime_context=runtime_context,
+            session_workspace_dir=session_workspace_dir,
+        )
+    return await build_chat_run_context(
+        run_data,
+        runtime_context,
+        session_workspace_dir=session_workspace_dir,
+    )
 
 
 async def build_chat_run_context(
@@ -228,7 +244,7 @@ async def build_chat_run_context(
     session_id = run_data.session_id or ""
     agent_id = run_data.agent_id or "default"
     agent_config = get_registered_agent(agent_id)
-    project_resources = resolve_project_resource_access(runtime_context)
+    project_resources = load_project_access(runtime_context)
     project_resources.require_agent(agent_id)
     if agent_id != "default" and agent_config is None:
         raise ValueError(f"Agent 配置不存在: {agent_id}")
@@ -239,9 +255,9 @@ async def build_chat_run_context(
     external_skills = discover_external_skills(runtime_context.project_root)
     configured_skill_ids = list(agent_config.skills if agent_config else run_data.skill_ids)
     requested_skill_ids = set(run_data.skill_ids or configured_skill_ids)
-    skill_ids = project_resources.filter_ids(
-        "skill",
+    skill_ids = _enabled_scanned_skill_ids(
         [skill_id for skill_id in configured_skill_ids if skill_id in requested_skill_ids],
+        external_skills,
     )
     runtime_model_settings = get_effective_model_settings()
     runtime_model_config = build_runtime_model_config(
@@ -275,10 +291,6 @@ async def build_chat_run_context(
     if readiness.ready:
         active_skill_run = get_active_session_skill_run(session_id, agent_id)
         active_skill = get_skill_for_run(active_skill_run)
-        if active_skill and active_skill.id not in project_resources.skill_ids:
-            raise ValueError(
-                f"Skill {active_skill.id} 已从 Project {runtime_context.project_id} 移除，不能继续当前 Skill Run。",
-            )
         if active_skill_run and active_skill_run.get("status") == "waiting_user" and persist_run:
             active_skill_run = update_skill_run_status(
                 active_skill_run,
@@ -298,12 +310,21 @@ async def build_chat_run_context(
         inject=True,
         configured_skill_ids=configured_skill_ids,
     )
-    forced_skills = resolve_forced_runtime_skills(
+    forced_skills, skill_instruction = resolve_message_forced_skills(
+        run_data.message,
         list(run_data.forced_skill_ids or []),
         project_resources=project_resources,
         external_skills=external_skills,
     )
     used_skills = _merge_forced_skills(used_skills, forced_skills)
+    from src.runtime.capabilities import resolve_capabilities
+
+    used_skills = list(resolve_capabilities(
+        mode="interactive",
+        agent=agent_config,
+        requested_skill_ids=[str(getattr(skill, "id", "") or "") for skill in forced_skills],
+        candidates=used_skills,
+    ).skills)
     skill_paths = resolve_runtime_skill_paths(used_skills, runtime_context=runtime_context)
     used_skill_details = list_skill_usage_details(used_skills)
     skill_runs: list[ChatSkillRun] = []
@@ -316,16 +337,15 @@ async def build_chat_run_context(
         memory_prompt, memory_recall = build_memory_prompt_and_recall(
             agent_id=agent_id,
             agent_name=agent_name,
-            workspace_id=runtime_context.workspace_id,
-            project_id=runtime_context.project_id,
+            project_slug=runtime_context.project_slug,
             query_text=run_data.message,
             freeze_session_id=session_id if persist_run else None,
             exclude_session_id=session_id or "",
         )
         del memory_recall
-    guardrails = scope_guardrails_to_project(
+    guardrails, readable_scopes = directory_scope_for_run(
         _build_runtime_guardrails(agent_config),
-        runtime_context.project_root,
+        runtime_context,
     )
     workspace_override = bool(session_workspace_dir)
     session_workspace_dir = resolve_run_workspace_dir(
@@ -372,13 +392,6 @@ async def build_chat_run_context(
         has_team=run_data.mode == "team",
         has_images=bool(run_data.images),
     )
-    extra_filesystem_scopes = _catalog_scopes(runtime_context.workspace_id)
-    _refresh_index_quietly(
-        runtime_context.project_root,
-        workspace_id=runtime_context.workspace_id,
-        project_id=runtime_context.project_id,
-        docker=guardrails.execution_backend == "docker",
-    )
     return ChatRunContext(
         session_id=session_id,
         runtime_context=runtime_context,
@@ -402,26 +415,18 @@ async def build_chat_run_context(
         system_prompt=system_prompt,
         guardrails=guardrails,
         runtime_tool_scope=runtime_tool_scope,
-        mcp_servers=_build_runtime_mcp_servers(
-            agent_config,
-            allowed_server_ids=project_resources.mcp_server_ids,
-        ),
-        knowledge_tools=_build_runtime_knowledge_tools(
-            agent_config,
-            allowed_tool_ids=project_resources.http_tool_ids,
-        ),
+        mcp_servers=_build_runtime_mcp_servers(agent_config),
+        knowledge_tools=_build_runtime_knowledge_tools(agent_config),
         session_workspace_dir=session_workspace_dir,
         session_artifact_paths_before=session_artifact_paths_before,
         approval_mode=approval_mode_for_run(session_id, getattr(run_data, "approval_mode", None)),
-        extra_filesystem_scopes=extra_filesystem_scopes,
+        extra_filesystem_scopes=readable_scopes,
         session_history=session_history,
-        user_message_note="\n\n".join(
-            part
-            for part in [
-                _build_file_attachments_user_note(run_data.files),
-                _build_forced_skills_user_note(forced_skills),
-            ]
-            if part
+        user_message_note=_build_file_attachments_user_note(run_data.files),
+        forced_skill_message=build_stacked_skill_user_message(
+            forced_skills,
+            skill_instruction,
+            guardrails=guardrails,
         ),
         system_prompt_sections=system_prompt_sections,
         memory_prompt=memory_prompt,
@@ -441,33 +446,38 @@ async def build_scheduled_run_context(
     """组装无人值守 firing 的 ChatRunContext。
 
     不调用模型 Readiness / intent，不跑 tool_scope_resolver。
-    冻结 Skill 必须全量命中，否则 skill_unbound。
+    只认 required_skills 冻结记录；校验失败不回退 skill_ids。
     """
 
     frozen_prompt = str(getattr(job, "frozen_prompt", "") or run_data.message or "").strip()
     if not frozen_prompt:
         raise ValueError("frozen_prompt 不能为空")
-    project = get_project(runtime_context.project_id)
+    project = get_project(runtime_context.project_slug)
     if project is None:
-        raise ValueError(f"project_archived: 找不到 Project {runtime_context.project_id}")
+        raise ValueError(f"project_archived: 找不到 Project {runtime_context.project_slug}")
     if str(project.get("status") or "") != "active":
-        raise ValueError(f"project_archived: Project {runtime_context.project_id} 已归档")
+        raise ValueError(f"project_archived: Project {runtime_context.project_slug} 已归档")
 
     session_id = run_data.session_id or ""
     agent_id = str(getattr(job, "agent_id", "") or run_data.agent_id or "default")
     agent_config = get_registered_agent(agent_id)
     if agent_id != "default" and agent_config is None:
         raise ValueError(f"agent_missing: Agent 配置不存在: {agent_id}")
-    project_resources = resolve_project_resource_access(runtime_context)
+    project_resources = load_project_access(runtime_context)
     project_resources.require_agent(agent_id)
     agent_name = run_data.agent_name or (agent_config.name if agent_config else "Assistant")
     base_system_prompt = resolve_agent_system_prompt(agent_config, run_data)
-    frozen_skill_ids = [str(item) for item in list(getattr(job, "skill_ids", None) or run_data.skill_ids or [])]
-    used_skills = _resolve_frozen_runtime_skills(
-        frozen_skill_ids,
-        agent_config=agent_config,
-        project_resources=project_resources,
-    )
+    frozen_records = list(getattr(job, "required_skills", None) or [])
+    from src.runtime.capabilities import SkillManifestError, resolve_capabilities
+
+    try:
+        used_skills = list(resolve_capabilities(
+            mode="frozen",
+            agent=agent_config,
+            frozen=frozen_records,
+        ).skills)
+    except SkillManifestError as exc:
+        raise ValueError(str(exc)) from exc
     runtime_model_settings = get_effective_model_settings()
     runtime_model_config = build_runtime_model_config(
         run_data=run_data,
@@ -491,14 +501,13 @@ async def build_scheduled_run_context(
     memory_prompt, _job_recall = build_memory_prompt_and_recall(
         agent_id=agent_id,
         agent_name=agent_name,
-        workspace_id=runtime_context.workspace_id,
-        project_id=runtime_context.project_id,
+        project_slug=runtime_context.project_slug,
         query_text=run_data.message,
         freeze_session_id=None,
     )
-    guardrails = scope_guardrails_to_project(
+    guardrails, readable_scopes = directory_scope_for_run(
         _build_runtime_guardrails(agent_config),
-        runtime_context.project_root,
+        runtime_context,
     )
     workspace_dir = resolve_run_workspace_dir(
         filesystem_scope=guardrails.filesystem_scope,
@@ -521,11 +530,14 @@ async def build_scheduled_run_context(
             _build_project_context_prompt(runtime_context),
             _build_job_workspace_prompt(workspace_dir),
             _build_runtime_context_prompt(),
+            _build_scheduled_preloaded_skill_prompt(used_skills, guardrails=guardrails),
+            _previous_result_prompt(job),
             memory_prompt,
             _build_final_answer_system_prompt(),
         ]
         if part
     )
+    readable_scopes = _with_skill_package_scopes(readable_scopes, used_skills)
     from src.scheduler.firing_toolkit import assemble_scheduled_firing_toolkit_spec
 
     spec = assemble_scheduled_firing_toolkit_spec(
@@ -561,16 +573,17 @@ async def build_scheduled_run_context(
         runtime_tool_scope=runtime_tool_scope,
         mcp_servers=_build_runtime_mcp_servers(
             agent_config,
-            allowed_server_ids=project_resources.mcp_server_ids,
             claimed_tool_ids=claimed_mcp,
         ),
         knowledge_tools=_build_runtime_knowledge_tools(
             agent_config,
-            allowed_tool_ids=claimed_http if claimed_http is not None else project_resources.http_tool_ids,
+            allowed_tool_ids=claimed_http,
         ),
+        extra_filesystem_scopes=readable_scopes,
         session_workspace_dir=workspace_dir,
         session_artifact_paths_before=session_artifact_paths_before,
         trigger_source="scheduled_job",
+        skill_loading_mode="scheduled_preloaded",
         approval_mode=_require_job_approval_mode(job),
         tool_name_denylist=denylist,
         write_scope_dir=workspace_dir,
@@ -582,39 +595,92 @@ async def build_scheduled_run_context(
     )
 
 
-def _resolve_frozen_runtime_skills(
+def _with_skill_package_scopes(scopes: list[str], skills: list[Any]) -> list[str]:
+    """讓 Read / Bash 能按需打開凍結包裡的 references/ 與 scripts/。"""
+
+    merged = list(scopes)
+    seen = set(merged)
+    for skill in skills:
+        raw = str(getattr(skill, "resource_path", "") or "").strip()
+        if not raw:
+            continue
+        path = Path(raw)
+        if path.name == "SKILL.md":
+            path = path.parent
+        if not path.is_dir():
+            continue
+        directory = str(path)
+        if directory in seen:
+            continue
+        seen.add(directory)
+        merged.append(directory)
+    return merged
+
+
+def _previous_result_prompt(job: Any) -> str:
+    """context_policy=fresh 不帶上一次結果；其他策略才讀 owner session 的最近回答。"""
+
+    if str(getattr(job, "context_policy", "fresh") or "fresh") == "fresh":
+        return ""
+    session_id = str(getattr(job, "created_from_session_id", "") or "")
+    if not session_id:
+        return ""
+    from src.storage.database import get_latest_assistant_chat_message
+
+    record = get_latest_assistant_chat_message(session_id)
+    text = str((record or {}).get("content") or "").strip()
+    if not text:
+        return ""
+    return f"## Previous Result\n{text[:4000]}"
+
+
+MAX_FORCED_SKILLS = MAX_STACKED_SKILLS
+
+
+def _chat_skill_catalog(external_skills: list[Skill] | None) -> list[Skill]:
+    """斜杠命令能對上的 Skill：本輪掃到的包，再加上已安裝啟用的登記。"""
+
+    from src.skills.registry import list_installed_enabled_skills
+
+    merged: list[Skill] = []
+    seen: set[str] = set()
+    for skill in [*(external_skills or []), *list_installed_enabled_skills()]:
+        skill_id = str(getattr(skill, "id", "") or "")
+        if not skill_id or skill_id in seen or not bool(getattr(skill, "enabled", True)):
+            continue
+        seen.add(skill_id)
+        merged.append(skill)
+    return merged
+
+
+def resolve_message_forced_skills(
+    message: str,
     skill_ids: list[str],
     *,
-    agent_config: Any | None,
     project_resources: ProjectResourceAccess,
-) -> list[Skill]:
-    """冻结 skill_ids 必须全部仍安装、仍绑定 Agent 与 Project，禁止静默丢掉。"""
+    external_skills: list[Skill] | None = None,
+) -> tuple[list[Skill], str]:
+    """用戶原文裡的斜杠 Skill 優先。沒有斜杠時才用請求裡的 forced_skill_ids。"""
 
-    frozen = [str(skill_id) for skill_id in skill_ids if str(skill_id).strip()]
-    if not frozen:
-        return []
-    agent_skill_ids = list(getattr(agent_config, "skills", None) or [])
-    missing: list[str] = []
-    used: list[Skill] = []
-    for skill_id in frozen:
-        skill = get_installed_skill(skill_id)
-        if skill is None:
-            missing.append(skill_id)
-            continue
-        if skill_id not in agent_skill_ids:
-            missing.append(skill_id)
-            continue
-        used.append(skill)
-    project_bound = project_resources.filter_ids("skill", frozen)
-    if project_bound != frozen:
-        missing.extend(skill_id for skill_id in frozen if skill_id not in project_bound)
-    if missing or [skill.id for skill in used] != frozen:
-        unique = list(dict.fromkeys(missing or frozen))
-        raise ValueError(f"skill_unbound: {', '.join(unique)}")
-    return used
-
-
-MAX_FORCED_SKILLS = 3
+    if "/" in (message or ""):
+        inline, instruction = extract_inline_skill_commands(message, _chat_skill_catalog(external_skills))
+        if inline:
+            return (
+                resolve_forced_runtime_skills(
+                    [str(getattr(skill, "id", "") or "") for skill in inline],
+                    project_resources=project_resources,
+                    external_skills=external_skills,
+                ),
+                instruction,
+            )
+    return (
+        resolve_forced_runtime_skills(
+            skill_ids,
+            project_resources=project_resources,
+            external_skills=external_skills,
+        ),
+        message,
+    )
 
 
 def resolve_forced_runtime_skills(
@@ -623,7 +689,7 @@ def resolve_forced_runtime_skills(
     project_resources: ProjectResourceAccess,
     external_skills: list[Skill] | None = None,
 ) -> list[Skill]:
-    """解析发送框强制开启的 Skill：须已安装启用且过 Project binding。"""
+    """解析发送框强制开启的 Skill：须已安装且启用。"""
 
     requested = list(dict.fromkeys(str(skill_id).strip() for skill_id in skill_ids if str(skill_id).strip()))
     if not requested:
@@ -642,17 +708,13 @@ def resolve_forced_runtime_skills(
         resolved.append(skill)
     if missing:
         raise ValueError(f"强制开启的 Skill 不存在或未启用：{', '.join(missing)}")
-
-    allowed = set(project_resources.filter_ids("skill", requested))
-    blocked = [
-        skill.id
-        for skill in resolved
-        if skill.id not in allowed
-        and not _skill_is_shared(skill)
-        and str(getattr(skill, "source_scope", "") or "") != "project"
-    ]
-    if blocked:
-        raise ValueError(f"强制开启的 Skill 未授权给当前 Project：{', '.join(blocked)}")
+    del project_resources
+    try:
+        load_skill_invocations(resolved, strict=False)
+    except SkillInvocationError as exc:
+        if exc.code == "skill_context_budget_exceeded":
+            raise ValueError(f"本轮 Skill 正文超出上限：{exc.skill_name}") from exc
+        raise ValueError(str(exc)) from exc
     return resolved
 
 
@@ -678,8 +740,7 @@ def _build_project_context_prompt(runtime_context: RuntimeContext) -> str:
     instructions = load_project_instructions(runtime_context)
     parts = [
         "# Project Context",
-        f"Workspace ID: {runtime_context.workspace_id}",
-        f"Project ID: {runtime_context.project_id}",
+        f"Project slug: {runtime_context.project_slug}",
         f"Project name: {runtime_context.project_name}",
         f"Project root: {runtime_context.project_root}",
         "All file operations must remain within the effective project filesystem scope.",
@@ -689,31 +750,20 @@ def _build_project_context_prompt(runtime_context: RuntimeContext) -> str:
     return "\n".join(parts)
 
 
-def _catalog_scopes(workspace_id: str) -> list[str]:
-    """当前 Workspace 的文件工具 catalog 根。"""
+def _enabled_scanned_skill_ids(skill_ids: list[str], external_skills: list[Skill]) -> list[str]:
+    """保留已启用且扫描命中的 Skill，不查绑定表。"""
 
-    from src.catalog.paths import extra_filesystem_scopes_for_workspace
-
-    try:
-        return extra_filesystem_scopes_for_workspace(workspace_id)
-    except ValueError:
-        return []
-
-
-def _refresh_index_quietly(project_root, *, workspace_id: str, project_id: str, docker: bool) -> None:
-    """INDEX 写失败不得打断 Chat。"""
-
-    from src.catalog.index import refresh_project_index
-
-    try:
-        refresh_project_index(
-            project_root,
-            workspace_id=workspace_id,
-            project_id=project_id,
-            docker=docker,
-        )
-    except Exception:
-        return
+    scanned = {
+        str(getattr(skill, "id", "") or ""): skill
+        for skill in external_skills
+    }
+    kept: list[str] = []
+    for skill_id in skill_ids:
+        skill = scanned.get(skill_id) or get_installed_skill(skill_id)
+        if skill is None or not bool(getattr(skill, "enabled", True)):
+            continue
+        kept.append(skill_id)
+    return kept
 
 
 def _skill_is_shared(skill) -> bool:

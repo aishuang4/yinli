@@ -6,19 +6,10 @@ import hashlib
 import json
 from dataclasses import asdict
 
-from src.project_resources import resolve_project_resource_access
 from src.runtime.agent_resources import build_runtime_guardrails, build_runtime_knowledge_tools, build_runtime_mcp_servers, scope_guardrails_to_project
 from src.runtime_context import resolve_runtime_context
 from src.security.authorization.boundaries import RuntimeCapabilities
 from src.server.routes.agents import get_registered_agent
-from src.storage.database import get_project
-
-
-def _stable_resource_id(value: str) -> str:
-    """Skill 正文哈希只屬於資源修訂，不能寫進 Run 能力版本。"""
-
-    text = str(value)
-    return "" if text.startswith("external-") else text
 
 
 class RuntimeCapabilityReader:
@@ -35,19 +26,18 @@ class RuntimeCapabilityReader:
 
     def snapshot(self) -> tuple[str, object, list, list]:
         """能力摘要含真实连接，密钥实值不进入普通授权元数据。"""
-        current = resolve_runtime_context(project_id=self.context.project_id,
+        current = resolve_runtime_context(project_slug=self.context.project_slug,
                                           session_id=self.context.session_id,
                                           run_id=self.context.run_id, agent_id=self.actor_id)
-        if current.workspace_id != self.context.workspace_id or current.project_root != self.context.project_root:
-            raise ValueError("运行 Project 或 Workspace 归属已变化")
-        resources = resolve_project_resource_access(current)
-        resources.require_agent(self.actor_id)
+        if current.project_root != self.context.project_root:
+            raise ValueError("运行 Project 归属已变化")
         config = get_registered_agent(self.actor_id)
         if config is None and self.actor_id != "default":
             raise ValueError("执行 Agent 已删除")
         guardrails = scope_guardrails_to_project(build_runtime_guardrails(config), current.project_root)
-        mcp = build_runtime_mcp_servers(config, allowed_server_ids=resources.mcp_server_ids)
-        knowledge = build_runtime_knowledge_tools(config, allowed_tool_ids=resources.http_tool_ids)
+        # MCP 与 HTTP 是租户全局，不再按 Project binding 裁剪。
+        mcp = build_runtime_mcp_servers(config)
+        knowledge = build_runtime_knowledge_tools(config)
         # 旧审批字段不进入能力摘要，不得从 trusted/bypass 推导 Chat 开放。
         capability_fields = {name: getattr(guardrails, name) for name in (
             "filesystem_scope", "shell_blacklist", "network_enabled", "execution_backend",
@@ -58,13 +48,8 @@ class RuntimeCapabilityReader:
         # 这里只哈希稳定的授权边界。Project 的 updatedAt、展示字段、Skill 正文和
         # MCP/HTTP 定义正文属于资源修订，不能因为正常编辑让当前 Run 的无关工具自锁。
         stable_resources = {
-            "workspaceId": resources.workspace_id,
-            "projectId": resources.project_id,
-            "agentIds": sorted(resources.agent_ids),
-            "skillIds": sorted(_stable_resource_id(item) for item in resources.skill_ids),
-            "mcpServerIds": sorted(resources.mcp_server_ids),
-            "httpToolIds": sorted(resources.http_tool_ids),
-            "projectSkillRefs": sorted(_stable_resource_id(item) for item in resources.project_skill_refs),
+            "projectSlug": str(getattr(current, "project_id", "") or ""),
+            "agentId": self.actor_id,
         }
         payload = {"guardrails": capability_fields, "resources": stable_resources,
                    "mcpServerIds": sorted(item.name for item in mcp),

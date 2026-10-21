@@ -207,8 +207,8 @@ class ChatSession(BaseModel):
     agent_id: str
     agent_name: str
     mode: Literal["agent", "team"] = "agent"
-    workspace_id: str = "default"
-    project_id: str = "default"
+    project_slug: str = Field(default="default", alias="projectSlug")
+    cwd: str = ""
     kind: Literal["chat", "scheduled_job"] = "chat"
     approval_mode: Literal["manual", "model_review", "full_access"] = Field(default="manual", alias="approvalMode")
     created_at: str
@@ -273,8 +273,8 @@ class ChatMessage(BaseModel):
     session_id: str | None = None
     """会话 ID（可选，用于上下文连续性）"""
 
-    project_id: str | None = None
-    """Project ID；未提供时使用 default Project。"""
+    project_slug: str | None = Field(default=None, alias="projectSlug")
+    """创建会话时的 Project slug。缺省且没有已有会话时返回 400，不回退到 default。"""
 
     message: str
     """用户输入的消息文本"""

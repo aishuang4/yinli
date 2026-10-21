@@ -45,9 +45,9 @@ def test_fake_sandbox_names_include_tenant_and_drop_caps(hosted_env):
             root.mkdir(parents=True)
             open_hosted_workspace(
                 tenant_id=user,
-                project_id=project,
+                project_slug=project,
                 agent_id="default",
-                project_root=root,
+                fallback_root=root,
                 base_image="python:3.11-slim",
             )
     assert len(fake.created) == 2

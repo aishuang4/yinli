@@ -47,7 +47,7 @@ class SessionApprovalUpdate(BaseModel):
 
 @router.patch("/sessions/{session_id}/model")
 async def update_session_model(session_id: str, data: SessionModelUpdate,
-    project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId")) -> dict:
+    project_slug: str = Query(default=DEFAULT_PROJECT_ID, alias="projectSlug")) -> dict:
     from src.config.runtime_settings import resolve_model_binding
     from src.storage.database import list_chat_runs_by_statuses
     from src.server.routes.chat.lifecycle import ACTIVE_RUN_STATUSES
@@ -55,7 +55,7 @@ async def update_session_model(session_id: str, data: SessionModelUpdate,
         raise HTTPException(status_code=409, detail="当前会话仍有运行或待审批任务。")
     record = get_chat_session(session_id)
     session = session_model(record)
-    if session is None or session.project_id != project_id:
+    if session is None or session.project_slug != project_slug:
         raise HTTPException(status_code=404, detail="Session not found")
     try:
         binding = resolve_model_binding(data.model_config_id)
@@ -67,7 +67,7 @@ async def update_session_model(session_id: str, data: SessionModelUpdate,
 
 @router.patch("/sessions/{session_id}/approval")
 async def update_session_approval(session_id: str, data: SessionApprovalUpdate,
-    project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId")) -> dict:
+    project_slug: str = Query(default=DEFAULT_PROJECT_ID, alias="projectSlug")) -> dict:
     """保存下一轮模式。model_review 不可用时拒绝，不静默改成其他模式。"""
 
     from src.security.authorization.models import validate_approval_mode
@@ -75,7 +75,7 @@ async def update_session_approval(session_id: str, data: SessionApprovalUpdate,
 
     record = get_chat_session(session_id)
     session = session_model(record)
-    if session is None or session.project_id != project_id:
+    if session is None or session.project_slug != project_slug:
         raise HTTPException(status_code=404, detail="Session not found")
     try:
         mode = validate_approval_mode(data.approval_mode)
@@ -101,7 +101,7 @@ def _filter_sessions_by_kind(sessions: list[ChatSession], kind: str) -> list[Cha
 
 @router.get("/sessions")
 async def list_sessions(
-    project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
+    project_slug: str = Query(default=DEFAULT_PROJECT_ID, alias="projectSlug"),
     kind: Annotated[str, Query()] = "chat",
 ) -> list[ChatSession]:
     """
@@ -110,7 +110,7 @@ async def list_sessions(
     Returns:
         list[ChatSession]: 会话列表
     """
-    records = list_chat_sessions(project_id=project_id, kind=None if kind == "all" else kind)
+    records = list_chat_sessions(project_slug=project_slug, kind=None if kind == "all" else kind)
     return attach_group_studio_hints(_filter_sessions_by_kind(
         [session for item in records if (session := session_model(item)) is not None],
         kind,
@@ -133,11 +133,11 @@ async def list_session_catalog(
 @router.get("/sessions/{session_id}/messages")
 async def list_session_messages(
     session_id: str,
-    project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
+    project_slug: str = Query(default=DEFAULT_PROJECT_ID, alias="projectSlug"),
 ) -> list[dict[str, Any]]:
     """获取指定会话的消息列表"""
     session = session_model(get_chat_session(session_id))
-    if session is None or session.project_id != project_id:
+    if session is None or session.project_slug != project_slug:
         raise HTTPException(status_code=404, detail="Session not found")
     return _normalize_history_messages([
         message_model(item) for item in list_chat_messages(session_id)
@@ -147,17 +147,17 @@ async def list_session_messages(
 @router.delete("/sessions/{session_id}", status_code=204)
 async def delete_session(
     session_id: str,
-    project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
+    project_slug: str = Query(default=DEFAULT_PROJECT_ID, alias="projectSlug"),
 ) -> None:
     """删除指定会话、消息及其私有附件和产物。"""
     session = session_model(get_chat_session(session_id))
-    if session is None or session.project_id != project_id:
+    if session is None or session.project_slug != project_slug:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    project = get_project(session.project_id)
+    project = get_project(session.project_slug)
     if project is None:
         raise HTTPException(status_code=409, detail="会话所属 Project 不存在，无法清理私有文件")
-    project_root = Path(str(project.get("rootPath") or "")).expanduser().resolve()
+    project_root = Path(str(project.get("primaryPath") or "")).expanduser().resolve()
     if not project_root.is_dir():
         raise HTTPException(status_code=409, detail="会话所属 Project root 不可用，无法清理私有文件")
 

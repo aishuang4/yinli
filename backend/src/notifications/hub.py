@@ -32,7 +32,7 @@ class NotificationHub:
         from src.tenancy.context import current_tenant
 
         tenant_id = current_tenant().tenant_id
-        project_id = str(event.get("projectId") or "")
+        project_id = str(event.get("projectSlug") or "")
         stale: list[asyncio.Queue[dict[str, Any]]] = []
         for subscriber_tenant, filter_project, queue in list(self._subscribers):
             if subscriber_tenant != tenant_id:

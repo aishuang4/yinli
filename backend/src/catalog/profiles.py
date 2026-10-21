@@ -9,11 +9,10 @@ from typing import Any
 import yaml
 
 from src.agents.runtime_types import MAX_REACT_ITERS
-from src.config.runtime_paths import default_project_root
+from src.config.runtime_paths import project_default_root
 from src.agents.system_agents import (
     is_default_chat_agent_id,
     is_default_websearch_job_agent_id,
-    is_system_agent_id,
 )
 from src.catalog.agent_models import AgentResponse, Guardrails, PlanConfig
 from src.catalog.models import ProfileParseResult
@@ -31,7 +30,7 @@ from src.scheduler.job_toolkit import (
 
 _FRONTMATTER_RE = re.compile(r"\A---\s*\n(?P<yaml>.*?)\n---\s*\n?(?P<body>.*)\Z", re.DOTALL)
 _IGNORED_KEYS = {
-    "planConfig", "plan_config", "status", "workspaceId", "workspace_id",
+    "planConfig", "plan_config", "status",
     "systemManaged", "system_managed", "sourcePath", "sourceKind",
     "modelConfig", "model_config",
 }
@@ -62,12 +61,12 @@ def _guardrails_from_yaml(value: Any, warnings: list[str]) -> Guardrails:
         warnings.append("filesystem_scope=/ 已按空字符串处理")
         filesystem_scope = ""
     payload = {
-        "filesystem_scope": filesystem_scope or str(default_project_root()),
+        "filesystem_scope": filesystem_scope or str(project_default_root()),
         "shell_blacklist": data.get("shell_blacklist"),
         "network_enabled": data.get("network_enabled"),
-        "human_approval": data.get("human_approval"),
-        "tool_permission_mode": data.get("tool_permission_mode"),
-        "tool_permission_profile": data.get("tool_permission_profile"),
+        "operation_scope": data.get("operation_scope") or (
+            "read_only" if data.get("tool_permission_profile") == "read_only" else None
+        ),
         "execution_backend": data.get("execution_backend"),
         "docker_image": data.get("docker_image"),
         "persistent_sandbox": data.get("persistent_sandbox"),
@@ -84,7 +83,7 @@ def _guardrails_from_yaml(value: Any, warnings: list[str]) -> Guardrails:
 
 def _dump_filesystem_scope(value: str) -> str:
     text = str(value or "").strip()
-    if not text or text == str(default_project_root()) or text in {"/", str(Path("/").resolve())}:
+    if not text or text == str(project_default_root()) or text in {"/", str(Path("/").resolve())}:
         return ""
     return text
 
@@ -119,11 +118,6 @@ def apply_role_invariants(agent: AgentResponse, warnings: list[str]) -> AgentRes
         mcp_tools = list(bound["mcp"])
         knowledge_tools = list(dict.fromkeys([*bound["http"], *bound["knowledge"]]))
         skills = list(bound["skill"])
-        guardrails = guardrails.model_copy(update={
-            "human_approval": False,
-            "tool_permission_profile": "trusted_tools",
-            "tool_permission_mode": "bypass",
-        })
         if is_default_websearch_job_agent_id(agent.id):
             if not guardrails.network_enabled:
                 warnings.append("system-websearch-job 必须保持网络开启")
@@ -151,11 +145,12 @@ def parse_profile_markdown(
     text: str,
     *,
     path: Path,
-    workspace_id: str,
     source_kind: str = "profile",
+    **_extra: object,
 ) -> ProfileParseResult:
-    """解析 profile Markdown。失败时 agent 为 None。"""
+    """解析 profile Markdown。失败时 agent 为 None。未知键丢弃，不因此失败。"""
 
+    del _extra
     warnings: list[str] = []
     errors: list[str] = []
     raw = text.encode("utf-8")
@@ -226,7 +221,6 @@ def parse_profile_markdown(
         "status": "idle",
         "created_at": created_at,
         "updated_at": updated_at,
-        "workspaceId": "default" if is_system_agent_id(agent_id) else workspace_id,
         "role": role,
         "jobToolkit": parse_job_toolkit(payload.get("job_toolkit")),
         "sourcePath": str(path.resolve()),
@@ -258,9 +252,7 @@ def dump_profile_markdown(agent: AgentResponse) -> str:
             "filesystem_scope": _dump_filesystem_scope(agent.guardrails.filesystem_scope),
             "shell_blacklist": list(agent.guardrails.shell_blacklist),
             "network_enabled": bool(agent.guardrails.network_enabled),
-            "human_approval": bool(agent.guardrails.human_approval),
-            "tool_permission_mode": agent.guardrails.tool_permission_mode,
-            "tool_permission_profile": agent.guardrails.tool_permission_profile,
+            "operation_scope": agent.guardrails.operation_scope,
             "execution_backend": agent.guardrails.execution_backend,
             "docker_image": agent.guardrails.docker_image,
             "persistent_sandbox": bool(agent.guardrails.persistent_sandbox),
@@ -282,7 +274,6 @@ def write_profile_file(path: Path, agent: AgentResponse) -> AgentResponse:
     parsed = parse_profile_markdown(
         text,
         path=path,
-        workspace_id=agent.workspace_id,
         source_kind=agent.source_kind or "profile",
     )
     if parsed.agent is None:

@@ -108,23 +108,26 @@ class MarkdownMemoryStore:
             content=content,
         )
 
-    def read_global_memory(self, workspace_id: str = "default") -> MarkdownMemoryDocument:
-        """读取全局偏好记忆；不存在时返回默认模板但不创建文件。"""
+    def read_global_memory(self) -> MarkdownMemoryDocument:
+        """读取租户全局偏好记忆；不存在时返回默认模板但不创建文件。
+
+        路径跟 ``tenant_root()`` 走，不再用 workspace 当 owner。
+        """
 
         return self._read_document(
             scope="global_preference",
-            owner_id=workspace_id,
-            path=self._global_path(workspace_id),
+            owner_id="tenant",
+            path=self._global_path(),
             template=GLOBAL_MEMORY_TEMPLATE,
         )
 
-    def write_global_memory(self, workspace_id: str, content: str) -> MarkdownMemoryDocument:
-        """保存全局偏好记忆；首次写入时创建文件。"""
+    def write_global_memory(self, content: str) -> MarkdownMemoryDocument:
+        """保存租户全局偏好记忆；首次写入时创建文件。"""
 
         return self._write_document(
             scope="global_preference",
-            owner_id=workspace_id,
-            path=self._global_path(workspace_id),
+            owner_id="tenant",
+            path=self._global_path(),
             content=content,
         )
 
@@ -219,10 +222,13 @@ class MarkdownMemoryStore:
             return self.root / "users" / "user_memory.md"
         return self.root / "users" / _safe_id(user_id) / "user_memory.md"
 
-    def _global_path(self, workspace_id: str) -> Path:
-        if _safe_id(workspace_id) == "default":
-            return self.root / "global" / "global_memory.md"
-        return self.root / "global" / _safe_id(workspace_id) / "global_memory.md"
+    def _global_path(self) -> Path:
+        """全局记忆固定在租户记忆根下，一份文件，不按 workspace 分目录。
+
+        ``self.root`` 默认来自 ``memory_root()``，而它由 ``tenant_root()`` 决定。
+        """
+
+        return self.root / "global" / "global_memory.md"
 
     def _habits_path(self, user_id: str) -> Path:
         if _safe_id(user_id) == "default":

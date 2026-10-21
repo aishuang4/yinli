@@ -215,10 +215,18 @@ async def test_interactive_model_deny_pauses_for_review_and_job_returns_deny():
     again = await service.authorize(interactive)
     assert again.id == paused.id and again.verdict == "needs_human"
 
+    review_calls = {"n": 0}
+
+    async def counting_reviewer(action):
+        review_calls["n"] += 1
+        return PlatformAuthorizationService._decision(action, "deny", "model", "smartguard_deny", "不应调用")
+
+    service.reviewer = counting_reviewer
     job = action_for(approvalMode="model_review", surface="job").model_copy(
-        update={"call_id": "job-call", "tool_name": "HttpRequest"})
+        update={"call_id": "job-call", "tool_name": "MemoryDelete", "tool_class": "MemoryDelete", "effect": "mutation"})
     denied = await service.authorize(job)
-    assert denied.verdict == "deny" and denied.source == "model"
+    assert review_calls["n"] == 0
+    assert denied.verdict == "deny" and denied.source == "policy"
     assert service.store.get_approval(denied.id, job.authorization) is None
 
     calls = 0

@@ -23,13 +23,13 @@ def test_index_contains_required_headings(tmp_path, monkeypatch) -> None:
         "guardrails": {},
         "created_at": utc_now(),
         "updated_at": utc_now(),
-        "workspaceId": "default",
+        
         "role": "chat",
         "jobToolkit": {},
     }))
     project = tmp_path / "project"
     project.mkdir()
-    path = refresh_project_index(project, workspace_id="default", project_id="p1")
+    path = refresh_project_index(project, project_id="p1")
     assert path is not None
     text = path.read_text(encoding="utf-8")
     for heading in (
@@ -54,19 +54,20 @@ def test_index_contains_required_headings(tmp_path, monkeypatch) -> None:
 def test_index_records_warnings_and_job_parse_errors(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("src.config.runtime_paths.USER_DATA_ROOT", tmp_path)
     invalidate_catalog()
-    from src.catalog.paths import profile_path
+    from src.catalog.paths import jobs_dir, profile_path
 
-    path = profile_path("default", "writer")
+    path = profile_path("writer")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         "---\nid: writer\nname: 写手\nrole: chat\nweird_key: 1\n---\n\n写\n",
         encoding="utf-8",
     )
     project = tmp_path / "project"
-    jobs = project / ".agents" / "jobs"
-    jobs.mkdir(parents=True)
+    project.mkdir()
+    jobs = jobs_dir()
+    jobs.mkdir(parents=True, exist_ok=True)
     (jobs / "bad.md").write_text("not-a-job\n", encoding="utf-8")
-    out = refresh_project_index(project, workspace_id="default", project_id="p1")
+    out = refresh_project_index(project, project_id="p1")
     assert out is not None
     text = out.read_text(encoding="utf-8")
     assert "unknown_keys" in text

@@ -47,8 +47,7 @@ class MemoryMarkdownCandidateStore:
             "resolution": row["resolution"],
             "agentId": row["agent_id"],
             "agentName": row["agent_name"],
-            "workspaceId": row["workspace_id"],
-            "projectId": row["project_id"],
+            "projectSlug": row["project_slug"],
             "sourceSessionId": row["source_session_id"],
             "sourceRunId": row["source_run_id"],
             "createdAt": row["created_at"],
@@ -64,9 +63,9 @@ class MemoryMarkdownCandidateStore:
                 """
                 INSERT INTO memory_markdown_candidates (
                     id, scope, owner_id, section, operation, note, exact_text, replacement_text,
-                    reason, confidence, status, resolution, agent_id, agent_name, workspace_id, project_id,
+                    reason, confidence, status, resolution, agent_id, agent_name, project_slug,
                     source_session_id, source_run_id, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '', ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '', ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record_id,
@@ -81,8 +80,7 @@ class MemoryMarkdownCandidateStore:
                     float(payload.get("confidence") or 0.0),
                     str(payload.get("agentId") or ""),
                     str(payload.get("agentName") or ""),
-                    str(payload.get("workspaceId") or "default"),
-                    str(payload.get("projectId") or "default"),
+                    str(payload.get("projectSlug") or payload.get("project_slug") or "default"),
                     str(payload.get("sourceSessionId") or ""),
                     str(payload.get("sourceRunId") or ""),
                     now,
@@ -118,7 +116,7 @@ class MemoryMarkdownCandidateStore:
         *,
         status: str | None = "pending",
         scope: str | None = None,
-        project_id: str | None = None,
+        project_slug: str | None = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
         self.ensure_db()
@@ -130,9 +128,9 @@ class MemoryMarkdownCandidateStore:
         if scope:
             clauses.append("scope = ?")
             params.append(scope)
-        if project_id:
-            clauses.append("project_id = ?")
-            params.append(project_id)
+        if project_slug:
+            clauses.append("project_slug = ?")
+            params.append(project_slug)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with self.lock, self.connect() as conn:
             rows = conn.execute(
@@ -141,13 +139,13 @@ class MemoryMarkdownCandidateStore:
             ).fetchall()
         return [self._from_row(row) for row in rows]
 
-    def count_pending(self, *, project_id: str | None = None) -> int:
+    def count_pending(self, *, project_slug: str | None = None) -> int:
         self.ensure_db()
         clauses = ["status = 'pending'"]
         params: list[Any] = []
-        if project_id:
-            clauses.append("project_id = ?")
-            params.append(project_id)
+        if project_slug:
+            clauses.append("project_slug = ?")
+            params.append(project_slug)
         with self.lock, self.connect() as conn:
             row = conn.execute(
                 f"SELECT COUNT(*) AS n FROM memory_markdown_candidates WHERE {' AND '.join(clauses)}",

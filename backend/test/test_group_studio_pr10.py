@@ -90,12 +90,9 @@ def test_no_persistent_teams_table(isolated_db):
 
 def test_require_agent_skips_host_sentinel():
     access = ProjectResourceAccess(
-        workspace_id="default",
-        project_id="default",
-        agent_ids=frozenset(),
-        skill_ids=frozenset(),
-        mcp_server_ids=frozenset(),
-        http_tool_ids=frozenset(),
+        project_slug="default",
+        session_id="s",
+        project_root=Path("."),
     )
     access.require_agent("default")
     access.require_agent(GROUP_STUDIO_HOST_AGENT_ID)

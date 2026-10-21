@@ -131,9 +131,9 @@ async def execute_script_in_dir(
 
         spec = build_hosted_spec(
             tenant_id=current_tenant().tenant_id,
-            project_id="script",
+            project_slug="script",
             agent_id=filename,
-            project_root=cwd,
+            fallback_root=cwd,
             extra="script",
         )
         provider = get_sandbox_provider()

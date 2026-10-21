@@ -13,9 +13,9 @@ def test_create_update_delete_uses_files() -> None:
         name="文件助手",
         description="d",
         system_prompt="hello-catalog",
-        workspaceId="default",
+        
     )))
-    path = profile_path(created.workspace_id, created.id)
+    path = profile_path(created.id)
     assert path.is_file()
     assert "hello-catalog" in path.read_text(encoding="utf-8")
 

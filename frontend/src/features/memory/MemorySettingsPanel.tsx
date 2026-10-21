@@ -142,10 +142,9 @@ export function MemorySettingsPanel({
               </DetailSection>
 
               <DetailSection title="准入质量" icon={<Settings2 size={14} />}>
-                <div className="grid grid-cols-3 gap-2 text-xs">
+                <div className="grid grid-cols-2 gap-2 text-xs">
                   <MetricBlock label="历史阈值" value={settings.admission.historyThreshold.toFixed(2)} />
                   <MetricBlock label="Markdown" value={settings.admission.markdownThreshold.toFixed(2)} />
-                  <MetricBlock label="Skill" value={settings.admission.skillThreshold.toFixed(2)} />
                 </div>
                 <div className="mt-3 flex flex-wrap gap-1">
                   <Tag size="small" color="blue">{settings.admission.mode}</Tag>
@@ -172,11 +171,6 @@ export function MemorySettingsPanel({
                     label="Markdown 阈值"
                     value={draft.markdownThreshold ?? settings.admission.markdownThreshold}
                     onChange={(value) => updateDraft('markdownThreshold', value)}
-                  />
-                  <RangeField
-                    label="Skill 阈值"
-                    value={draft.skillThreshold ?? settings.admission.skillThreshold}
-                    onChange={(value) => updateDraft('skillThreshold', value)}
                   />
                   <RangeField
                     label="模型评分权重"

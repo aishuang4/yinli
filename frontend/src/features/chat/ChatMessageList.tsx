@@ -9,6 +9,7 @@ import { MessageContentBlock, MessageFiles, MessageImages, StreamingPlaceholder 
 import { MessageFrame } from './MessageFrame';
 import { MessageToolbar } from './MessageToolbar';
 import type { FilePreviewTarget } from '../file-preview/filePreview';
+import type { Skill } from '../../types/skill';
 import type { LocalMessage } from './types';
 
 type ResolveInteraction = (
@@ -23,18 +24,20 @@ export function MessageBubble({
   sessionId,
   previewPath,
   onOpenPreview,
+  skills = [],
 }: {
   message: LocalMessage;
   sessionId?: string;
   previewPath?: string;
   onOpenPreview?: (target: FilePreviewTarget) => void;
+  skills?: Skill[];
 }) {
   if (message.role === 'user') {
     return (
       <MessageFrame isUser containIntrinsicSize="88px">
         <MessageImages images={message.images} align="right" />
         <MessageFiles files={message.files} align="right" />
-        <MessageContentBlock content={message.content} role="user" />
+        <MessageContentBlock content={message.content} role="user" skills={skills} />
       </MessageFrame>
     );
   }

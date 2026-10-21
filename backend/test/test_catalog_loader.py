@@ -3,17 +3,19 @@
 from pathlib import Path
 
 from src.catalog.loader import (
+    ensure_loaded,
     get_registered_agent,
     invalidate_catalog,
-    list_workspace_agents,
+    list_registered_agents,
     save_agent,
 )
 from src.catalog.agent_models import AgentResponse
-from src.catalog.paths import profile_path
+from src.catalog.paths import profile_path, profiles_dir
 from src.catalog.system_defaults import utc_now
+from src.config.runtime_paths import agents_root
 
 
-def _user_agent(agent_id: str, workspace_id: str, prompt: str = "p") -> AgentResponse:
+def _user_agent(agent_id: str, prompt: str = "p") -> AgentResponse:
     return AgentResponse.model_validate({
         "id": agent_id,
         "name": agent_id,
@@ -28,47 +30,54 @@ def _user_agent(agent_id: str, workspace_id: str, prompt: str = "p") -> AgentRes
         "guardrails": {},
         "created_at": utc_now(),
         "updated_at": utc_now(),
-        "workspaceId": workspace_id,
         "role": "chat",
         "jobToolkit": {},
     })
 
 
-def test_save_and_list_by_workspace(tmp_path, monkeypatch) -> None:
+def test_save_and_list_registered_agents(tmp_path, monkeypatch) -> None:
+    """Agent 目录是全局 profiles，列出时不再按 workspace 过滤。"""
+
     monkeypatch.setattr("src.config.runtime_paths.USER_DATA_ROOT", tmp_path)
     invalidate_catalog()
-    save_agent(_user_agent("alpha", "ws-a"))
-    save_agent(_user_agent("beta", "ws-b"))
-    ids_a = [item.id for item in list_workspace_agents("ws-a")]
-    assert "alpha" in ids_a
-    assert "beta" not in ids_a
-    assert "default" in ids_a
+    save_agent(_user_agent("alpha"))
+    save_agent(_user_agent("beta"))
+    ids = [item.id for item in list_registered_agents()]
+    assert "alpha" in ids
+    assert "beta" in ids
+    assert "default" in ids
     assert get_registered_agent("alpha").system_prompt == "p"
+    assert profile_path("alpha") == agents_root() / "profiles" / "alpha.md"
+    assert profile_path("alpha").is_file()
 
 
-def test_id_conflict_keeps_first(tmp_path, monkeypatch) -> None:
+def test_id_mismatch_keeps_saved_profile(tmp_path, monkeypatch) -> None:
+    """文件名与正文 id 不一致时丢弃该文件，已保存的 profile 仍是权威。"""
+
     monkeypatch.setattr("src.config.runtime_paths.USER_DATA_ROOT", tmp_path)
     invalidate_catalog()
-    first = save_agent(_user_agent("dup", "ws-a", "one"))
-    other = profile_path("ws-b", "dup")
-    other.parent.mkdir(parents=True, exist_ok=True)
-    other.write_text(profile_path("ws-a", "dup").read_text(encoding="utf-8").replace("ws-a", "ws-b"), encoding="utf-8")
+    first = save_agent(_user_agent("dup", "one"))
+    other = profiles_dir() / "alias.md"
+    text = profile_path("dup").read_text(encoding="utf-8").replace("id: dup", "id: other", 1)
+    other.write_text(text, encoding="utf-8")
     invalidate_catalog()
     loaded = get_registered_agent("dup")
     assert loaded is not None
     assert loaded.source_path == first.source_path
+    assert loaded.system_prompt == "one"
+    snapshot = ensure_loaded()
+    assert any("不一致" in item.message for item in snapshot.errors)
 
 
 def test_symlink_outside_catalog_is_error(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("src.config.runtime_paths.USER_DATA_ROOT", tmp_path)
     invalidate_catalog()
-    save_agent(_user_agent("ok", "default"))
+    save_agent(_user_agent("ok"))
     outside = tmp_path / "outside.md"
     outside.write_text("leak", encoding="utf-8")
-    link = profile_path("default", "leak")
+    link = profile_path("leak")
     link.symlink_to(outside)
     invalidate_catalog()
-    from src.catalog.loader import ensure_loaded
 
     assert get_registered_agent("leak") is None
     snapshot = ensure_loaded()

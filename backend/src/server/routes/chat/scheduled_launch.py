@@ -20,7 +20,7 @@ from src.server.routes.chat.initial_events import (
 )
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.projection.source_events import SourceEvent
-from src.server.routes.chat.run_context import build_scheduled_run_context
+from src.server.routes.chat.run_context import build_run_context
 from src.server.routes.chat.runtime import _build_runtime_guardrails, scope_guardrails_to_project
 from src.server.routes.chat.runtime_dispatcher import execute_chat_runtime
 from src.server.routes.chat.startup_checks import get_startup_error
@@ -53,8 +53,7 @@ async def launch_scheduled_chat_run(
     agent_name: str,
     frozen_prompt: str,
     skill_ids: list[str],
-    workspace_id: str,
-    project_id: str,
+    project_slug: str,
     workspace_dir: Path,
     runtime_context: Any,
     job: Any,
@@ -69,13 +68,12 @@ async def launch_scheduled_chat_run(
         session_id=session_id,
         agent_id=agent_id,
         agent_name=agent_name,
-        workspace_id=workspace_id,
-        project_id=project_id,
+        project_slug=project_slug,
         title=frozen_prompt,
     )
     run_data = ChatMessage(
         session_id=session_id,
-        project_id=project_id,
+        project_slug=project_slug,
         message=frozen_prompt,
         agent_id=agent_id,
         agent_name=agent_name,
@@ -86,11 +84,12 @@ async def launch_scheduled_chat_run(
     )
 
     async def event_stream() -> AsyncGenerator[SourceEvent, None]:
-        ctx = await build_scheduled_run_context(
-            job,
-            firing,
-            run_data=run_data,
-            runtime_context=runtime_context.with_run_id(current_chat_background_run_id()),
+        ctx = await build_run_context(
+            run_data,
+            runtime_context.with_run_id(current_chat_background_run_id()),
+            mode="frozen",
+            job=job,
+            firing=firing,
             session_workspace_dir=str(workspace_dir),
         )
         persist_user_message_and_trace(ctx, run_data)
@@ -123,8 +122,7 @@ async def launch_scheduled_chat_run(
         agent_name=agent_name,
         task=frozen_prompt,
         mode="agent",
-        workspace_id=workspace_id,
-        project_id=project_id,
+        project_slug=project_slug,
         persist=True,
         trigger_source="scheduled_job",
         scheduled_job_id=job_id,

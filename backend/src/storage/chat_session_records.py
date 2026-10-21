@@ -63,8 +63,8 @@ _SESSION_UPDATE_FIELDS = {
     "agent_id": "agent_id",
     "agent_name": "agent_name",
     "mode": "mode",
-    "workspace_id": "workspace_id",
-    "project_id": "project_id",
+    "project_slug": "project_slug",
+    "cwd": "cwd",
     "model_config_id": "model_config_id",
     "updated_at": "updated_at",
     "message_count": "message_count",
@@ -84,8 +84,7 @@ class ChatSessionRecordStore:
         dumps: Callable[[Any], str],
         loads: Callable[[str | None, Any], Any],
         empty_display_snapshot: dict[str, Any],
-        default_workspace_id: str,
-        default_project_id: str,
+        default_project_slug: str,
     ) -> None:
         self.ensure_db = ensure_db
         self.connect = connect
@@ -93,21 +92,20 @@ class ChatSessionRecordStore:
         self.dumps = dumps
         self.loads = loads
         self.empty_display_snapshot = empty_display_snapshot
-        self.default_workspace_id = default_workspace_id
-        self.default_project_id = default_project_id
+        self.default_project_slug = default_project_slug
 
     def get_location(self, session_id: str) -> dict[str, str] | None:
         self.ensure_db()
         with self.lock, self.connect() as conn:
             row = conn.execute(
-                "SELECT workspace_id, project_id FROM chat_sessions WHERE id = ?",
+                "SELECT project_slug, cwd FROM chat_sessions WHERE id = ?",
                 (session_id,),
             ).fetchone()
         if row is None:
             return None
         return {
-            "workspaceId": str(row["workspace_id"] or self.default_workspace_id),
-            "projectId": str(row["project_id"] or self.default_project_id),
+            "projectSlug": str(row["project_slug"] or self.default_project_slug),
+            "cwd": str(row["cwd"] or ""),
         }
 
     def latest_assistant(self, session_id: str) -> dict[str, Any] | None:
@@ -159,8 +157,6 @@ class ChatSessionRecordStore:
         return {
             "id": row["id"],
             "sessionId": row["session_id"],
-            "workspaceId": row["workspace_id"],
-            "projectId": row["project_id"],
             "role": row["role"],
             "content": row["content"],
             "agentId": row["agent_id"],
@@ -285,8 +281,8 @@ class ChatSessionRecordStore:
             "agent_id": row["agent_id"],
             "agent_name": row["agent_name"],
             "mode": row["mode"] or "agent",
-            "workspace_id": row["workspace_id"] or self.default_workspace_id,
-            "project_id": row["project_id"] or self.default_project_id,
+            "project_slug": row["project_slug"] or self.default_project_slug,
+            "cwd": row["cwd"] if "cwd" in keys else "",
             "kind": row["kind"] if "kind" in keys and row["kind"] else "chat",
             "modelConfigId": row["model_config_id"] or "",
             "approvalMode": row["approval_mode"] if "approval_mode" in keys else "manual",
@@ -334,13 +330,13 @@ class ChatSessionRecordStore:
             row = conn.execute("SELECT * FROM chat_sessions WHERE id = ?", (session_id,)).fetchone()
         return self._session_from_row(row) if row else None
 
-    def list_sessions(self, *, project_id: str | None = None, kind: str | None = None) -> list[dict[str, Any]]:
+    def list_sessions(self, *, project_slug: str | None = None, kind: str | None = None) -> list[dict[str, Any]]:
         self.ensure_db()
         clauses: list[str] = []
         params: list[Any] = []
-        if project_id is not None:
-            clauses.append("project_id = ?")
-            params.append(project_id)
+        if project_slug is not None:
+            clauses.append("project_slug = ?")
+            params.append(project_slug)
         if kind is not None:
             clauses.append("kind = ?")
             params.append(kind)
@@ -365,7 +361,7 @@ class ChatSessionRecordStore:
             conn.execute(
                 """
                 INSERT OR IGNORE INTO chat_sessions (
-                    id, title, agent_id, agent_name, mode, workspace_id, project_id, kind,
+                    id, title, agent_id, agent_name, mode, project_slug, cwd, kind,
                     created_at, updated_at, message_count, model_config_id, approval_mode
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
@@ -375,8 +371,8 @@ class ChatSessionRecordStore:
                     session.get("agent_id") or session.get("agentId") or "",
                     session.get("agent_name") or session.get("agentName") or "",
                     session.get("mode") or "agent",
-                    session.get("workspace_id") or session.get("workspaceId") or self.default_workspace_id,
-                    session.get("project_id") or session.get("projectId") or self.default_project_id,
+                    session.get("project_slug") or session.get("projectSlug") or self.default_project_slug,
+                    session.get("cwd") or "",
                     session.get("kind") or "chat",
                     session.get("created_at") or session.get("createdAt") or "",
                     session.get("updated_at") or session.get("updatedAt") or "",

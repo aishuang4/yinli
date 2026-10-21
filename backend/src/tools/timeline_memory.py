@@ -21,15 +21,14 @@ class TimelineRetrieve(ToolBase):
 
     name: str = "timeline_retrieve"
     description: str = (
-        "从时间线检索原始对话。可按工作区、项目、智能体、场合（chat/group/job）、"
+        "从时间线检索原始对话。可按项目、智能体、场合（chat/group/job）、"
         "时间起迄、说话方和关键词过滤。全空表示在整条时间线上查找，仍会限制返回量。"
         "查到后请立刻调用 timeline_ingest，只留下这次任务需要的内容。"
     )
     input_schema: dict[str, Any] = {
         "type": "object",
         "properties": {
-            "workspaceId": {"type": "string", "description": "可选工作区。空表示不限。"},
-            "projectId": {"type": "string", "description": "可选项目。空表示不限。"},
+            "projectSlug": {"type": "string", "description": "可选项目 slug。空表示不限。"},
             "agentId": {"type": "string", "description": "可选智能体。空表示不限。"},
             "surface": {"type": "string", "description": "可选场合：chat、group、job。空表示全部。"},
             "timeFrom": {"type": "string", "description": "可选开始时间，ISO 格式。"},
@@ -54,15 +53,13 @@ class TimelineRetrieve(ToolBase):
         audit_agent_id: str = "",
         audit_agent_name: str = "",
         *,
-        workspace_id: str = "",
-        project_id: str = "",
+        project_slug: str = "",
     ) -> None:
         super().__init__()
         self.audit_session_id = audit_session_id
         self.audit_agent_id = audit_agent_id
         self.audit_agent_name = audit_agent_name
-        self.workspace_id = workspace_id
-        self.project_id = project_id
+        self.project_slug = project_slug
 
     async def check_permissions(
         self,
@@ -77,8 +74,7 @@ class TimelineRetrieve(ToolBase):
 
     async def __call__(
         self,
-        workspaceId: str = "",
-        projectId: str = "",
+        projectSlug: str = "",
         agentId: str = "",
         surface: str = "",
         timeFrom: str = "",
@@ -88,8 +84,7 @@ class TimelineRetrieve(ToolBase):
         **kwargs: Any,
     ) -> ToolChunk:
         payload = search_timeline(
-            workspace_id=workspaceId or self.workspace_id,
-            project_id=projectId or self.project_id,
+            project_slug=projectSlug or self.project_slug,
             agent_id=agentId,
             surface=surface,
             time_from=timeFrom,
@@ -111,8 +106,7 @@ class TimelineRetrieve(ToolBase):
                 "messageCount": len(payload.get("messages") or []),
                 "truncated": bool(payload.get("truncated")),
                 "filters": {
-                    "workspaceId": workspaceId or self.workspace_id,
-                    "projectId": projectId or self.project_id,
+                    "projectSlug": projectSlug or self.project_slug,
                     "agentId": agentId,
                     "surface": surface,
                     "timeFrom": timeFrom,

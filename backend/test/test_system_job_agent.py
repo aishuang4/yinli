@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -32,9 +33,7 @@ def test_default_websearch_job_agent_config_is_exact() -> None:
     ]
     assert agent.job_toolkit.optional == []
     assert agent.guardrails.network_enabled is True
-    assert agent.guardrails.human_approval is False
-    assert agent.guardrails.tool_permission_profile == "trusted_tools"
-    assert agent.guardrails.tool_permission_mode == "bypass"
+    assert agent.guardrails.operation_scope == "normal"
     assert agent.system_managed is True
     assert agent.model_dump(by_alias=True)["systemManaged"] is True
 
@@ -61,21 +60,17 @@ def test_load_agents_backfills_system_job_agent_in_existing_database(
     """迁移后用户 Agent 进 profile 文件，系统 Agent 由代码提供，sqlite 表清空。"""
 
     monkeypatch.setattr("src.config.runtime_paths.USER_DATA_ROOT", tmp_path)
-    from src.storage.database import upsert_json_record
-
-    upsert_json_record("catalog", "agent_migration_v1", {"status": "pending"})
     database.upsert_agent({
         "id": "existing-agent",
         "name": "Existing",
         "system_prompt": "prompt",
-        "workspaceId": "default",
+        
         "guardrails": {},
         "skills": [],
         "mcpTools": [],
         "tags": [],
         "role": "chat",
     })
-    upsert_json_record("catalog", "agent_migration_v1", {"status": ""})
     agents_routes._load_agents()
 
     assert "existing-agent" in agents_routes._agents
@@ -91,11 +86,11 @@ def test_system_agents_are_visible_in_every_workspace(monkeypatch) -> None:
     websearch_agent = agents_routes._build_default_websearch_job_agent()
     local_agent = websearch_agent.model_copy(update={
         "id": "workspace-job",
-        "workspace_id": "workspace-b",
+        
     })
     other_agent = websearch_agent.model_copy(update={
         "id": "other-job",
-        "workspace_id": "workspace-a",
+        
     })
     monkeypatch.setattr(agents_routes, "_sync_agents_from_catalog", lambda: None)
     monkeypatch.setattr(agents_routes, "_agents", {
@@ -105,12 +100,13 @@ def test_system_agents_are_visible_in_every_workspace(monkeypatch) -> None:
         other_agent.id: other_agent,
     })
 
-    agents = asyncio.run(agents_routes.list_agents(workspace_id="workspace-b"))
+    agents = asyncio.run(agents_routes.list_agents())
 
     assert [agent.id for agent in agents] == [
         "default",
         DEFAULT_WEBSEARCH_JOB_AGENT_ID,
         "workspace-job",
+        "other-job",
     ]
 
 
@@ -128,7 +124,7 @@ def test_system_websearch_job_agent_cannot_be_deleted(monkeypatch) -> None:
 
 
 def test_system_websearch_job_agent_keeps_unattended_invariants(monkeypatch) -> None:
-    """更新可改业务配置，但不能改角色、关闭网络或恢复人工审批。"""
+    """更新可改业务配置，但不能改角色或关闭网络。"""
 
     agent = agents_routes._build_default_websearch_job_agent()
     monkeypatch.setattr(agents_routes, "_agents", {agent.id: agent})
@@ -140,33 +136,23 @@ def test_system_websearch_job_agent_keeps_unattended_invariants(monkeypatch) -> 
         agents_routes.AgentUpdate(
             name="联网任务",
             role="chat",
-            guardrails=agents_routes.Guardrails(
-                network_enabled=False,
-                human_approval=True,
-                toolPermissionProfile="ask_every_time",
-                toolPermissionMode="ask_every_time",
-            ),
+            guardrails=agents_routes.Guardrails(network_enabled=False),
         ),
     ))
 
     assert updated.name == "联网任务"
     assert updated.role == "job"
     assert updated.guardrails.network_enabled is True
-    assert updated.guardrails.human_approval is False
-    assert updated.guardrails.tool_permission_profile == "trusted_tools"
-    assert updated.guardrails.tool_permission_mode == "bypass"
+    assert updated.guardrails.operation_scope == "normal"
 
 
 def test_system_job_agent_does_not_require_project_binding() -> None:
     """只豁免系统 Agent 本身，不向白名单加入其他资源。"""
 
     access = ProjectResourceAccess(
-        workspace_id="workspace-b",
-        project_id="project-b",
-        agent_ids=frozenset(),
-        skill_ids=frozenset(),
-        mcp_server_ids=frozenset(),
-        http_tool_ids=frozenset(),
+        project_slug="project-b",
+        session_id="s",
+        project_root=Path("."),
     )
 
     access.require_agent(DEFAULT_WEBSEARCH_JOB_AGENT_ID)
@@ -200,12 +186,12 @@ def test_job_agent_catalog_filters_other_workspaces(monkeypatch) -> None:
     local_agent = system_agent.model_copy(update={
         "id": "local-job",
         "name": "Local",
-        "workspace_id": "workspace-b",
+        
     })
     other_agent = system_agent.model_copy(update={
         "id": "other-job",
         "name": "Other",
-        "workspace_id": "workspace-a",
+        
     })
     monkeypatch.setattr(agents_routes, "_agents", {
         system_agent.id: system_agent,
@@ -213,8 +199,8 @@ def test_job_agent_catalog_filters_other_workspaces(monkeypatch) -> None:
         other_agent.id: other_agent,
     })
 
-    line = scheduled_job_tools._job_agent_catalog_line("workspace-b")
+    line = scheduled_job_tools._job_agent_catalog_line()
 
     assert f"WebSearch ({DEFAULT_WEBSEARCH_JOB_AGENT_ID})" in line
     assert "Local (local-job)" in line
-    assert "Other (other-job)" not in line
+    assert "Other (other-job)" in line

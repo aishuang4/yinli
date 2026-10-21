@@ -14,7 +14,6 @@ export type ObservationKind =
 export interface TraceSummary {
   id: string;
   sessionId: string;
-  workspaceId: string;
   projectId: string;
   title: string;
   agentId: string | null;
@@ -33,7 +32,6 @@ export interface TraceObservation {
   id: string;
   runId: string;
   sessionId: string;
-  workspaceId: string;
   projectId: string;
   kind: ObservationKind | string;
   name: string;

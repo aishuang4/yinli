@@ -39,7 +39,6 @@ export interface HttpTool {
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
-  workspaceId?: string;
 }
 
 export type HttpToolPayload = Omit<HttpTool, 'id' | 'createdAt' | 'updatedAt'>;

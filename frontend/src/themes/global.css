@@ -582,6 +582,75 @@ button[class*="-btn"] .lucide {
   border-color: color-mix(in srgb, var(--color-accent) 70%, var(--color-border));
 }
 
+.chat-skill-input {
+  position: relative;
+  min-height: 52px;
+}
+
+.chat-skill-input__mirror,
+.chat-skill-input__field {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0;
+  border: 0;
+  padding: 12px 16px 0;
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1.5;
+  letter-spacing: normal;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-height: 180px;
+  scrollbar-gutter: stable;
+}
+
+.chat-skill-input__mirror {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  pointer-events: none;
+  color: var(--color-text-primary);
+  scrollbar-width: none;
+}
+
+.chat-skill-input__mirror::-webkit-scrollbar {
+  display: none;
+}
+
+.chat-skill-input__field {
+  position: relative;
+  display: block;
+  min-height: 52px;
+  resize: none;
+  overflow-y: auto;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--color-text-primary);
+  outline: none;
+}
+
+.chat-skill-input__field::selection {
+  background: color-mix(in srgb, var(--color-accent) 35%, transparent);
+  color: transparent;
+}
+
+.chat-skill-input__placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.chat-skill-token {
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  color: var(--color-accent);
+  box-decoration-break: clone;
+}
+
+.chat-message-content--user .chat-skill-token {
+  color: inherit;
+  background: color-mix(in srgb, white 24%, transparent);
+}
+
 .chat-file-drop {
   position: absolute;
   inset: 12px;

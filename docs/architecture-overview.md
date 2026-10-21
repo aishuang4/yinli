@@ -45,7 +45,7 @@ ReAct 专题合同见 `docs/chat-react-runtime.md`。这里只保留总览步骤
 5. `runtime_dispatcher.py` 只按 architecture 分发；当前只分发到 ReAct。
 6. `react_runtime.py` 按 executor 执行单 Agent 或 Team。
 7. `runtime_builder.py` 组装模型配置、Skill 包路径、ToolScope 和主 Agent runtime spec；Chat 请求不接收持久 Team 或固定成员上下文。
-8. `run_context.py` 在 readiness 通过后按 Workspace、Project、Agent 和请求白名单裁剪可用 Skill catalog，并注入记忆上下文；完整 `SKILL.md` 不预注入 system prompt。Chat 发送框可另传 `forced_skill_ids`（最多 3 个）本轮强制开启：须已安装启用且过 Project binding，可临时突破未共享 Skill 的 Agent 绑定；正文通过 `activate_skill` 预启用，并在用户消息附 `<pinned-skill>`，不灌进 system prompt。
+8. `run_context.py` 在 readiness 通过后按 Workspace、Project、Agent 和请求白名单裁剪可用 Skill catalog，并注入记忆上下文；完整 `SKILL.md` 不预注入 system prompt。Chat 发送框里选中的 Skill 以 `/name` 留在用户原文中并高亮，最多 5 个。后端从这句话抓取斜杠命令；没有斜杠时仍接受 `forced_skill_ids`。须已安装启用且过 Project binding，可临时突破未共享 Skill 的 Agent 绑定。后端用与定时任务相同的读取把总头和各份 SKILL.md 拼成一条用户消息，不灌进 system prompt，也不另写 Skill viewer。
 9. `leader_stream.py` 消费 AgentScope `reply_stream()`，转换文本、工具、权限、Plan Mode、Skill 和 HITL 事件。
 10. `completion.py` 完成消息落库、Trace、Skill 状态和错误收尾，并在轻量 `MemoryAdmissionGate` 后触发 Markdown 记忆提炼和历史记忆持久化。
 11. `background_runs.py` 将后台 Run 与前端 SSE 订阅解耦，把结构化 SourceEvent 送入 Domain Event 和 ProjectionRunner。
@@ -125,7 +125,7 @@ middleware 数据，最后才用 `skill_runs` 兜底恢复已读 Skill。会话�
 ## AgentScope 原生 Skills
 
 - 应用层继续负责安装、SQLite、Workspace / Project binding、Agent 配置、权限和 UI；AgentScope 负责运行时 catalog、渐进式披露和内置 `Skill` viewer。
-- Toolkit 通过 `skills_or_loaders` 接收已裁剪的绝对 Skill 包目录；system prompt 只包含 `name`、`description` 和 `dir`，模型实际调用 `Skill` 后才读取完整指令。用户在 Chat Composer 勾选的 Skill 走 `forced_skill_ids`，本轮预启用 SKILL.md 并要求模型按说明书执行。
+- Toolkit 通过 `skills_or_loaders` 接收已裁剪的绝对 Skill 包目录；system prompt 只包含 `name`、`description` 和 `dir`，模型实际调用 `Skill` 后才读取完整指令。用户在 Chat Composer 勾选的 Skill 走 `forced_skill_ids`（最多 5 个），本轮把 SKILL.md 全文拼进一条用户消息。
 - Skill 正文使用 `scripts/foo.py`、`references/bar.md` 等标准相对路径。模型根据 catalog 中的 `dir` 转成绝对路径后调用普通 Read、Grep、Glob 或 Bash；不使用 `$SKILL_DIR`，也不新增每脚本工具。
 - Skill script 复用单一 `GuardedBash`；本地 execute 权限与 network 权限独立。Shell 黑名单仅是拦截明显误操作的提示级防护，不能抵抗命令混淆；真正的执行隔离依赖 DockerWorkspace 与权限审批。Skill 不突破 Agent 的 ToolScope、filesystem 或审批边界。
 - 持久 DockerWorkspace 会把允许的 Skill 包 seed 到容器 `/workspace/skills`，catalog 披露容器路径；非持久 Docker sandbox 暂不支持 Skills，启动时返回明确错误。
@@ -219,7 +219,7 @@ Chat 主界面只依赖两个稳定产品边界：`RUNTIME_EVENT: RuntimeFrame` 
 当前 Plan Mode 不是旧 `runtime.kind=plan`。它基于 AgentScope middleware hooks 接入 ReAct：
 
 - Chat Composer 用左下角 `+` 双栏菜单收纳添加文件、模式（计划 / 深度思考 / 单 Agent 与 Team）、Agent 和本轮 Skill；工具栏展示当前 Agent，串流中只显示停止、空闲只显示发送。输入 `/` 仍可过滤 Skill。Plan Mode 仅支持单 Agent，不进入 Team Runtime。
-- Chat Composer 勾选的本轮强制 Skill 最多 3 个；请求字段是 `forced_skill_ids`，不要重载 Agent 绑定用的 `skill_ids`。
+- Chat Composer 勾选的本轮强制 Skill 最多 5 个；请求字段是 `forced_skill_ids`，不要重载 Agent 绑定用的 `skill_ids`。正文拼进这一轮用户消息，仍使用现有 `Skill` viewer 读取未选中的 Skill。
 - `plan_enter` 创建持久化 Plan，会话由 `plans / plan_revisions / plan_steps / plan_events` 保存。
 - `plan_write` / `plan_set_steps` 替换当前未提交 revision 的 Markdown 和结构化步骤。
 - middleware 在起草、模型修订和重新规划期间只允许读取类工具与安全只读 Bash，拒绝变更型工具。
@@ -236,10 +236,9 @@ Chat 主界面只依赖两个稳定产品边界：`RUNTIME_EVENT: RuntimeFrame` 
 - **时间线**：chat、群聊、定时任务的原始消息就是节点，不另存、不每轮注入。普通 Agent 默认有 `timeline_retrieve` 和 `timeline_ingest`。检索按工作区、项目、智能体、场合和时间取原文；摄取只把这次任务需要的内容留在当前会话，原文随后从上下文抽掉。
 - **习惯**：`users/{user_id}/habits.md`，属于这个人，所有智能体每轮注入全文。用户消息落库后、回复前由习惯智能体判断；寒暄不跑，判定后直接写。
 - **专业区**：`agents/{agent_id}/professional.md`，只属于该智能体，每轮注入全文，不设长度上限。该轮落库后由专业区判断智能体决定改写、删除或不改。Team Member 用自己的专业全文；Subagent 的 owner 是 `subagent:{name}`。
-- **普通技能**：成功收尾后仍走 Skill 自进化，不绑定智能体。手动触发只产生普通技能。
+- **普通技能**：已安装的 Skill 由目录、Chat 斜杠和定时任务冻结注入使用。对话成功收尾不再自动生成 Skill。
 - **旧数据**：`user_memory.md` / `agent_memory.md` / `global_memory.md` 和 `memory_nodes` 不再注入、不再从 Chat 收尾写入。Memory 页旧节点只读。Memory Wiki 已从页面和 API 移除。
 - **Subagent 其他上下文**：`subagents/runtime_context.py` 把 frontmatter `skills` 指定的已安装启用 Skill 转换为 AgentScope loader 路径，不注入完整 Skill 正文。`subagents/permission_policy.py` 执行 frontmatter `permissionMode` 并按父 Agent guardrails 上限收窄；`subagents/tool_policy.py` 基于父运行时真实工具池执行 `tools` / `disallowedTools` 裁剪，并同步限制传给子 Agent 的 MCP server 与知识库工具；审计通过 `SUBAGENT_CONTEXT` Runtime Event 记录 loadedSkills、missingSkillRefs、memoryAgentId、memoryInjected 和 permission requested / effective 摘要。
-- **Skill 自进化现状**：已有 `SkillEvolutionAgent`、`skill_draft_propose` 草稿工具、router gate、workflow evidence、颗粒度 gate、变量流抽象、候选持久化、标准 Skill 注册、相似 Skill 合并和用户显式请求生成 Skill 的手动触发流；自动生成 / 手动注册 Skill 会写入运行时 `skills/{skill_name}/SKILL.md` 并支持按 Skill 名称导出 zip。Memory 页面已能查看和操作候选队列；注册后不自动绑定 Agent。
 - **向量存储**：全局 `VectorStoreBackend` 抽象已支持 `disabled` / `zvec`，`VECTOR_STORE_PROVIDER` 仅首次初始化生效，之后按持久化 `VectorStorePolicy` 启动。
 
 ## 文件 Catalog

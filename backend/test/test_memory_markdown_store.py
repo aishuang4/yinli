@@ -64,22 +64,22 @@ def test_write_user_memory_creates_file(tmp_path):
 def test_read_global_memory_returns_template_without_creating_file(tmp_path):
     store = MarkdownMemoryStore(root=tmp_path / "memory")
 
-    doc = store.read_global_memory("workspace-1")
+    doc = store.read_global_memory()
 
     assert doc.scope == "global_preference"
-    assert doc.owner_id == "workspace-1"
+    assert doc.owner_id == "tenant"
     assert doc.exists is False
     assert doc.content == GLOBAL_MEMORY_TEMPLATE
     assert "<!--" not in doc.content
-    assert not (tmp_path / "memory" / "global" / "workspace-1" / "global_memory.md").exists()
+    assert not (tmp_path / "memory" / "global" / "global_memory.md").exists()
 
 
 def test_write_global_memory_creates_file(tmp_path):
     store = MarkdownMemoryStore(root=tmp_path / "memory")
 
-    doc = store.write_global_memory("workspace-1", "# Summary\n\n全局默认中文。")
+    doc = store.write_global_memory("# Summary\n\n全局默认中文。")
 
-    path = tmp_path / "memory" / "global" / "workspace-1" / "global_memory.md"
+    path = tmp_path / "memory" / "global" / "global_memory.md"
     assert doc.scope == "global_preference"
     assert doc.exists is True
     assert path.exists()
@@ -157,21 +157,20 @@ def test_global_markdown_route_uses_lazy_template_and_first_write(tmp_path, monk
 
     monkeypatch.setattr(markdown_store, "memory_root", lambda: tmp_path / "data" / "memory")
 
-    read_response = asyncio.run(memory_routes.read_global_markdown_memory("workspace-1"))
+    read_response = asyncio.run(memory_routes.read_default_global_markdown_memory())
     assert read_response["scope"] == "global_preference"
-    assert read_response["ownerId"] == "workspace-1"
+    assert read_response["ownerId"] == "tenant"
     assert read_response["exists"] is False
     assert read_response["content"] == GLOBAL_MEMORY_TEMPLATE
-    assert not (tmp_path / "data" / "memory" / "global" / "workspace-1" / "global_memory.md").exists()
+    assert not (tmp_path / "data" / "memory" / "global" / "global_memory.md").exists()
 
     write_response = asyncio.run(
-        memory_routes.write_global_markdown_memory(
-            "workspace-1",
+        memory_routes.write_default_global_markdown_memory(
             memory_routes.MarkdownMemoryUpdate(content="# Summary\n\n全局默认中文。"),
         ),
     )
     assert write_response["exists"] is True
-    assert (tmp_path / "data" / "memory" / "global" / "workspace-1" / "global_memory.md").exists()
+    assert (tmp_path / "data" / "memory" / "global" / "global_memory.md").exists()
 
 
 def test_default_global_markdown_route_uses_single_global_memory(tmp_path, monkeypatch):
@@ -181,7 +180,7 @@ def test_default_global_markdown_route_uses_single_global_memory(tmp_path, monke
 
     read_response = asyncio.run(memory_routes.read_default_global_markdown_memory())
     assert read_response["scope"] == "global_preference"
-    assert read_response["ownerId"] == "default"
+    assert read_response["ownerId"] == "tenant"
     assert read_response["exists"] is False
     assert read_response["content"] == GLOBAL_MEMORY_TEMPLATE
     assert not (tmp_path / "data" / "memory" / "global" / "global_memory.md").exists()
@@ -192,7 +191,7 @@ def test_default_global_markdown_route_uses_single_global_memory(tmp_path, monke
         ),
     )
     assert write_response["exists"] is True
-    assert write_response["ownerId"] == "default"
+    assert write_response["ownerId"] == "tenant"
     assert (tmp_path / "data" / "memory" / "global" / "global_memory.md").exists()
     assert not (tmp_path / "data" / "memory" / "global" / "default" / "global_memory.md").exists()
 
@@ -202,7 +201,7 @@ def test_default_memory_paths_use_descriptive_file_names(tmp_path):
 
     user = store.write_user_memory("default", "# Summary\n\n用户。")
     agent = store.write_agent_memory("default", "# Summary\n\nAgent。")
-    global_doc = store.write_global_memory("default", "# Summary\n\n全局。")
+    global_doc = store.write_global_memory("# Summary\n\n全局。")
 
     assert user.path.endswith("/users/user_memory.md")
     assert agent.path.endswith("/agents/agent_memory.md")

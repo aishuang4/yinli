@@ -39,7 +39,7 @@ print(json.dumps({
     "sandboxes": str(runtime_paths.sandbox_root()),
     "secrets": str(secret_dir()),
     "legacy_chat": str(chat_data_path()),
-    "workspace": str(runtime_paths.default_project_root()),
+    "workspace": str(runtime_paths.project_default_root()),
     "logs": str(runtime_paths.LOG_ROOT),
     "temp": str(runtime_paths.TEMP_ROOT),
 }))
@@ -60,24 +60,29 @@ print(json.dumps({
     assert Path(paths["subagents"]).parent == user_data_root
 
 
-def test_legacy_subagents_migrate_to_top_level_root() -> None:
-    """旧 data/subagents 内容迁移到新的租户 subagents，且不覆盖现有定义。"""
+def test_ensure_tenant_directories_does_not_move_old_data_dirs(tmp_path) -> None:
+    """启动只建新目录，不把 data/subagents 或 data/skill_packages 搬进租户根。"""
 
     from src.config import runtime_paths
+    from src.tenancy.context import TenantContext, use_tenant
 
-    legacy_root = runtime_paths.legacy_subagent_root()
-    target_root = runtime_paths.subagent_root()
-    legacy_root.mkdir(parents=True)
-    (legacy_root / "reviewer.md").write_text("legacy", encoding="utf-8")
-    (legacy_root / "shared.md").write_text("legacy shared", encoding="utf-8")
-    target_root.mkdir(parents=True)
-    (target_root / "shared.md").write_text("current", encoding="utf-8")
+    tenant_id = "phase5-paths"
+    runtime_paths.forget_tenant_directories(tenant_id)
+    with use_tenant(TenantContext(tenant_id=tenant_id, data_root=tmp_path, kind="local")):
+        legacy_agents = runtime_paths.data_root() / "subagents"
+        legacy_skills = runtime_paths.data_root() / "skill_packages"
+        legacy_agents.mkdir(parents=True)
+        legacy_skills.mkdir(parents=True)
+        (legacy_agents / "reviewer.md").write_text("legacy", encoding="utf-8")
+        (legacy_skills / "old-skill").mkdir()
 
-    runtime_paths._migrate_legacy_subagents()
+        runtime_paths.ensure_tenant_directories()
 
-    assert (target_root / "reviewer.md").read_text(encoding="utf-8") == "legacy"
-    assert (target_root / "shared.md").read_text(encoding="utf-8") == "current"
-    assert (legacy_root / "shared.md").exists()
+        assert (legacy_agents / "reviewer.md").read_text(encoding="utf-8") == "legacy"
+        assert (legacy_skills / "old-skill").is_dir()
+        assert not (runtime_paths.subagent_root() / "reviewer.md").exists()
+        assert not (runtime_paths.skill_packages_root() / "old-skill").exists()
+    runtime_paths.forget_tenant_directories(tenant_id)
 
 
 def test_ephemeral_desktop_defaults_migrate_to_stable_workspace(monkeypatch) -> None:
@@ -87,12 +92,12 @@ def test_ephemeral_desktop_defaults_migrate_to_stable_workspace(monkeypatch) -> 
     from src.storage import database
 
     monkeypatch.setattr(runtime_paths, "USING_CUSTOM_DATA_ROOT", True)
-    workspace_root = runtime_paths.USER_DATA_ROOT / "workspace"
+    stable_root = runtime_paths.project_default_root(database.DEFAULT_PROJECT_ID)
 
     database.ensure_db()
     with database._connect() as conn:
         conn.execute(
-            "UPDATE projects SET root_path = ? WHERE id = ?",
+            "UPDATE projects SET primary_path = ? WHERE slug = ?",
             ("/private/tmp/_MEIold/runtime", database.DEFAULT_PROJECT_ID),
         )
         conn.commit()
@@ -100,15 +105,15 @@ def test_ephemeral_desktop_defaults_migrate_to_stable_workspace(monkeypatch) -> 
     database.forget_db(database.db_path())
     database.ensure_db()
 
-    assert database.get_project(database.DEFAULT_PROJECT_ID)["rootPath"] == str(workspace_root)
+    assert database.get_project(database.DEFAULT_PROJECT_ID)["primaryPath"] == str(stable_root.resolve())
     normalized = database._normalize_guardrails({
         "filesystem_scope": "/private/tmp/_MEIold/runtime",
     })
-    assert normalized["filesystem_scope"] == str(workspace_root)
+    assert normalized["filesystem_scope"] == str(stable_root)
 
     with database._connect() as conn:
         conn.execute(
-            "UPDATE projects SET root_path = ? WHERE id = ?",
+            "UPDATE projects SET primary_path = ? WHERE slug = ?",
             ("/private/var/folders/example/T/agent-workstation", database.DEFAULT_PROJECT_ID),
         )
         conn.commit()
@@ -116,7 +121,7 @@ def test_ephemeral_desktop_defaults_migrate_to_stable_workspace(monkeypatch) -> 
     database.forget_db(database.db_path())
     database.ensure_db()
 
-    assert database.get_project(database.DEFAULT_PROJECT_ID)["rootPath"] == str(workspace_root)
+    assert database.get_project(database.DEFAULT_PROJECT_ID)["primaryPath"] == str(stable_root.resolve())
     custom_root = runtime_paths.USER_DATA_ROOT / "external-project"
     normalized_custom = database._normalize_guardrails({
         "filesystem_scope": str(custom_root),

@@ -177,13 +177,12 @@ async def _run_script_firing(
             firing_id, "failed", error_code="failed", error_message=str(exc),
         )
         return
-    project = get_project(job.project_id)
-    if project is None:
+    root = _job_directory(job)
+    if not str(root):
         service.complete_firing(
             firing_id, "failed", error_code="failed", error_message="Project 不存在",
         )
         return
-    root = Path(str(project.get("rootPath") or "")).expanduser()
     try:
         workspace = project_job_run_directory(root, job.id, firing.id)
         result = await execute_script_in_dir(
@@ -245,8 +244,8 @@ def _build_request(job: ScheduledJob, firing: ScheduledJobRun) -> ScheduledRunRe
     return ScheduledRunRequest(
         job_id=job.id,
         firing_id=firing.id,
-        workspace_id=job.workspace_id,
-        project_id=job.project_id,
+        project_slug=job.project_slug,
+        cwd=job.cwd,
         agent_id=job.agent_id,
         model_config_id=job.model_config_id,
         frozen_prompt=job.frozen_prompt,
@@ -262,11 +261,17 @@ async def _chat_session_id(chat_run_id: str) -> str:
     return run.session_id if run is not None else ""
 
 
+def _job_directory(job: ScheduledJob) -> Path:
+    """Job 的工作目录。优先 cwd，否则用 Project 的 primaryPath。"""
+
+    if str(job.cwd or "").strip():
+        return Path(job.cwd).expanduser()
+    project = get_project(job.project_slug)
+    return Path(str((project or {}).get("primaryPath") or "")).expanduser()
+
+
 def _scan_outputs(job: ScheduledJob, firing: ScheduledJobRun) -> dict[str, Any]:
-    project = get_project(job.project_id)
-    if project is None:
-        return {}
-    root = Path(str(project.get("rootPath") or "")).expanduser()
+    root = _job_directory(job)
     if not str(root):
         return {}
     try:
@@ -285,8 +290,17 @@ def _assistant_result_text(session_id: str) -> str:
     return str((record or {}).get("content") or "").strip()
 
 
+def _skill_pause_codes() -> frozenset[str]:
+    from src.runtime.capabilities import SKILL_HASH_CODES
+
+    return SKILL_HASH_CODES | {"skill_unbound"}
+
+
 def _launch_error_code(exc: ScheduledChatLaunchError) -> str:
     text = str(exc)
+    for code in sorted(_skill_pause_codes(), key=len, reverse=True):
+        if code in text:
+            return code
     lowered = text.lower()
     if "skill" in lowered:
         return "skill_unbound"

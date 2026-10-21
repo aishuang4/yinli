@@ -43,7 +43,7 @@ export function SubagentsPage() {
   const [selectedName, setSelectedName] = useState('');
   const [activeTab, setActiveTab] = useState<SubagentDetailTab>('definition');
   const [selectedInvocation, setSelectedInvocation] = useState<SubagentInvocation | null>(null);
-  const activeProjectId = useAppStore((state) => state.activeProjectId);
+  const activeProjectSlug = useAppStore((state) => state.activeProjectSlug);
 
   const filteredDefinitions = useMemo(() => (
     definitions.filter((definition) => matchText(query, [
@@ -133,7 +133,7 @@ export function SubagentsPage() {
         )}
       >
         <div className="h-full overflow-y-auto p-5">
-          <SubagentTaskDetail invocation={resolvedSelectedInvocation} projectId={activeProjectId} onRefresh={refresh} />
+          <SubagentTaskDetail invocation={resolvedSelectedInvocation} projectId={activeProjectSlug} onRefresh={refresh} />
         </div>
       </WorkbenchDetailShell>
     );

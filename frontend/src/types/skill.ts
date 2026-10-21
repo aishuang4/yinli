@@ -22,7 +22,6 @@ export interface Skill {
   availableToAllAgents?: boolean;
   installedAt: string | null;
   updatedAt: string;
-  workspaceId?: string;
   sourceKind?: string;
   sourceScope?: string;
 }
@@ -44,5 +43,4 @@ export interface SkillRegisterPayload {
   trigger?: string;
   content?: string;
   tags?: string[];
-  workspaceId?: string;
 }

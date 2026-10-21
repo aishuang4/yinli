@@ -8,7 +8,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from src.catalog.job_files import job_definition_path, job_source_path_index
+from src.config.runtime_paths import tenant_root
 from src.scheduler.models import (
     JOB_STATUSES,
     ScheduledJob,
@@ -30,8 +30,7 @@ _DISABLED_DETAIL = "调度未启用"
 class ScheduledJobCreateRequest(BaseModel):
     """创建定时任务；字段必须齐全。"""
 
-    workspace_id: str = Field(alias="workspaceId")
-    project_id: str = Field(alias="projectId")
+    project_slug: str = Field(alias="projectSlug")
     name: str
     agent_id: str = Field(default="", alias="agentId")
     model_config_id: str = Field(default="", alias="modelConfigId")
@@ -139,8 +138,7 @@ async def recheck_scheduled_job_capabilities(job_id: str) -> dict[str, Any]:
         result = evaluate_job_feasibility(
             task_intent=intent,
             agent_id=job.agent_id,
-            workspace_id=job.workspace_id,
-            project_id=job.project_id,
+            project_slug=getattr(job, "project_slug", "") or getattr(job, "project_id", ""),
             required_intents=tuple(job.capability_contract.required_intents),
         )
         updated = _service.update_job(job_id, {
@@ -154,22 +152,44 @@ async def recheck_scheduled_job_capabilities(job_id: str) -> dict[str, Any]:
     return serialize_job(updated)
 
 
+def _job_file_index(project_slug: str | None) -> dict[str, str]:
+    """租户 jobs 目录与当前 Project 下的 Job 定义。"""
+
+    index: dict[str, str] = {}
+    try:
+        jobs_dir = tenant_root() / "jobs"
+        if jobs_dir.is_dir():
+            for path in jobs_dir.glob("*.md"):
+                index[path.stem] = str(path)
+        if project_slug:
+            from src.storage.database import get_project
+
+            project = get_project(project_slug)
+            root = Path(str((project or {}).get("primaryPath") or ""))
+            project_jobs = root / ".agents" / "jobs"
+            if project_jobs.is_dir():
+                for path in project_jobs.glob("*.md"):
+                    index[path.stem] = str(path)
+    except Exception:
+        return index
+    return index
+
+
+def _job_slug(job: ScheduledJob) -> str:
+    return str(getattr(job, "project_slug", "") or getattr(job, "project_id", "") or "")
+
+
 def _source_path_for(job: ScheduledJob, index: dict[str, str] | None = None) -> str:
     if index and job.id in index:
         return index[job.id]
-    path = job_definition_path(
-        workspace_id=job.workspace_id,
-        project_id=job.project_id,
-        job_id=job.id,
-    )
+    path = tenant_root() / "jobs" / f"{job.id}.md"
     return str(path) if path.is_file() else ""
 
 
 def serialize_job(job: ScheduledJob, *, source_path: str | None = None) -> dict[str, Any]:
     return {
         "id": job.id,
-        "workspaceId": job.workspace_id,
-        "projectId": job.project_id,
+        "projectSlug": _job_slug(job),
         "name": job.name,
         "summary": job.summary,
         "status": job.status,
@@ -184,6 +204,18 @@ def serialize_job(job: ScheduledJob, *, source_path: str | None = None) -> dict[
         "lastRunAt": job.last_run_at,
         "frozenPrompt": job.frozen_prompt,
         "skillIds": job.skill_ids,
+        "requiredSkills": [
+            {
+                "id": str(item.get("id") or ""),
+                "name": str(item.get("name") or ""),
+                "sourceScope": str(item.get("source_scope") or item.get("sourceScope") or ""),
+                "sourcePath": str(item.get("source_path") or item.get("sourcePath") or ""),
+                "contentSha256": str(item.get("content_sha256") or item.get("contentSha256") or ""),
+                "frozenAt": str(item.get("frozen_at") or item.get("frozenAt") or ""),
+                "origin": str(item.get("origin") or ""),
+            }
+            for item in list(job.required_skills or [])
+        ],
         "toolScope": job.tool_scope.model_dump(),
         "inputSpec": job.input_spec,
         "outputSpec": job.output_spec,
@@ -222,8 +254,7 @@ def serialize_firing(firing: ScheduledJobRun) -> dict[str, Any]:
     return {
         "id": firing.id,
         "jobId": firing.job_id,
-        "workspaceId": firing.workspace_id,
-        "projectId": firing.project_id,
+        "projectSlug": str(getattr(firing, "project_slug", "") or getattr(firing, "project_id", "") or ""),
         "trigger": firing.trigger,
         "scheduledFor": firing.scheduled_for,
         "status": firing.status,
@@ -243,28 +274,15 @@ def serialize_firing(firing: ScheduledJobRun) -> dict[str, Any]:
 
 @router.get("/scheduled-jobs")
 async def list_scheduled_jobs(
-    project_id: str | None = Query(default=None, alias="projectId"),
+    project_slug: str | None = Query(default=None, alias="projectSlug"),
     status: str | None = Query(default=None),
 ) -> dict[str, Any]:
     """列出定时任务，并返回 scheduled_jobs.enabled，避免前端用写接口探测。"""
 
     if status and status not in JOB_STATUSES:
         raise HTTPException(status_code=422, detail=f"非法 Job 状态: {status}")
-    jobs = _service.list_jobs(project_id=project_id, status=status)
-    index: dict[str, str] = {}
-    try:
-        from src.storage.database import get_project
-
-        project = get_project(project_id) if project_id else None
-        raw_root = str((project or {}).get("rootPath") or "").strip()
-        workspace_id = str((project or {}).get("workspaceId") or "default")
-        index = job_source_path_index(
-            project_root=Path(raw_root) if raw_root else None,
-            project_id=project_id or "default",
-            workspace_id=workspace_id,
-        )
-    except Exception:
-        index = {}
+    jobs = _service.list_jobs(project_slug=project_slug, status=status)
+    index = _job_file_index(project_slug)
     return {
         "jobs": [serialize_job(item, source_path=_source_path_for(item, index)) for item in jobs],
         "enabled": is_scheduled_jobs_enabled(),
@@ -276,8 +294,7 @@ class FeasibilityRequest(BaseModel):
 
     task_intent: str = Field(alias="taskIntent")
     agent_id: str = Field(alias="agentId")
-    workspace_id: str = Field(alias="workspaceId")
-    project_id: str = Field(alias="projectId")
+    project_slug: str = Field(alias="projectSlug")
     required_intents: list[str] = Field(default_factory=list, alias="requiredIntents")
 
     model_config = {"populate_by_name": True, "extra": "forbid"}
@@ -292,8 +309,7 @@ async def check_scheduled_job_feasibility(data: FeasibilityRequest) -> dict[str,
     result = evaluate_job_feasibility(
         task_intent=data.task_intent,
         agent_id=data.agent_id,
-        workspace_id=data.workspace_id,
-        project_id=data.project_id,
+        project_slug=data.project_slug,
         required_intents=tuple(data.required_intents),
     )
     return result.to_public_json()

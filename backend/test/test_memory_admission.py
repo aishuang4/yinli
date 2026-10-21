@@ -69,19 +69,6 @@ def test_memory_admission_skips_trivial_turn():
     assert decision.reason == "trivial_turn"
 
 
-def test_memory_admission_keeps_manual_skill_signal_for_short_command():
-    decision = evaluate_memory_admission(
-        MemoryAdmissionInput(
-            user_message="把这个生成 Skill",
-            assistant_text="已开始生成。",
-            manual_skill_request=True,
-        )
-    )
-
-    assert decision.should_evaluate_skill is True
-    assert "manual_skill_request" in decision.signals
-
-
 def test_memory_admission_audit_payload_contains_scores_and_thresholds():
     decision = evaluate_memory_admission(
         MemoryAdmissionInput(

@@ -65,7 +65,7 @@ def client(isolated_db):
 
 def _create(client: TestClient, session_id: str = "sess-v2", agent_id: str = "default") -> dict:
     response = client.post("/api/group-studio/from-chat", json={
-        "projectId": DEFAULT_PROJECT_ID,
+        "projectSlug": DEFAULT_PROJECT_ID,
         "chatSessionId": session_id,
         "agentId": agent_id,
         "draftText": "这句只预填，不要落库",
@@ -111,7 +111,7 @@ def test_legacy_phase_routes_are_gone(client):
         f"/api/group-studio/{group_id}/start-execution",
         f"/api/group-studio/{group_id}/start-review",
     ):
-        response = client.post(path, json={"projectId": DEFAULT_PROJECT_ID})
+        response = client.post(path, json={"projectSlug": DEFAULT_PROJECT_ID})
         assert response.status_code == 410, path
         assert response.json()["detail"] == ILLEGAL_TRANSITION
         snapshot = client.get(f"/api/group-studio/{group_id}")
@@ -122,7 +122,7 @@ def test_legacy_phase_routes_are_gone(client):
 def test_host_sentinel_cannot_join(client):
     body = _create(client)
     response = client.post(f"/api/group-studio/{body['id']}/members", json={
-        "projectId": DEFAULT_PROJECT_ID,
+        "projectSlug": DEFAULT_PROJECT_ID,
         "agentId": GROUP_STUDIO_HOST_AGENT_ID,
     })
     assert response.status_code == 409
@@ -134,20 +134,20 @@ def test_host_sentinel_cannot_join(client):
 def test_empty_mentions_queues_workers_only(client, monkeypatch):
     monkeypatch.setattr(
         "src.group_studio.service._resolve_worker",
-        lambda agent_id, _workspace_id: {"id": agent_id, "name": agent_id, "role": "chat"},
+        lambda agent_id: {"id": agent_id, "name": agent_id, "role": "chat"},
     )
     body = _create(client)
     first = client.post(f"/api/group-studio/{body['id']}/members", json={
-        "projectId": DEFAULT_PROJECT_ID,
+        "projectSlug": DEFAULT_PROJECT_ID,
         "agentId": "writer",
     })
     second = client.post(f"/api/group-studio/{body['id']}/members", json={
-        "projectId": DEFAULT_PROJECT_ID,
+        "projectSlug": DEFAULT_PROJECT_ID,
         "agentId": "reviewer",
     })
     assert first.status_code == 200 and second.status_code == 200
     posted = client.post(f"/api/group-studio/{body['id']}/messages", json={
-        "projectId": DEFAULT_PROJECT_ID,
+        "projectSlug": DEFAULT_PROJECT_ID,
         "body": "大家都说一句",
         "mentions": [],
     })
@@ -161,7 +161,7 @@ def test_empty_mentions_queues_workers_only(client, monkeypatch):
 def test_empty_room_message_does_not_schedule(client):
     body = _create(client)
     posted = client.post(f"/api/group-studio/{body['id']}/messages", json={
-        "projectId": DEFAULT_PROJECT_ID,
+        "projectSlug": DEFAULT_PROJECT_ID,
         "body": "大家好",
         "mentions": [],
     })
@@ -177,7 +177,7 @@ def test_empty_room_message_does_not_schedule(client):
 def test_mentions_ineligible_does_not_fallback(client):
     body = _create(client)
     posted = client.post(f"/api/group-studio/{body['id']}/messages", json={
-        "projectId": DEFAULT_PROJECT_ID,
+        "projectSlug": DEFAULT_PROJECT_ID,
         "body": "点一个不存在的人",
         "mentions": ["gmbr_missing"],
     })
@@ -200,8 +200,8 @@ def test_available_agents_excludes_seated_and_default(client, monkeypatch):
             self.description = name
 
     monkeypatch.setattr(
-        "src.server.routes.agents.list_workspace_agents",
-        lambda _workspace_id: [
+        "src.server.routes.agents.list_registered_agents",
+        lambda: [
             _Agent("default", "Assistant"),
             _Agent("writer", "写手"),
             _Agent("reviewer", "审稿"),
@@ -210,7 +210,7 @@ def test_available_agents_excludes_seated_and_default(client, monkeypatch):
     )
     monkeypatch.setattr(
         "src.group_studio.service._resolve_worker",
-        lambda agent_id, _workspace_id: {"id": agent_id, "name": agent_id, "role": "chat"},
+        lambda agent_id: {"id": agent_id, "name": agent_id, "role": "chat"},
     )
     body = _create(client)
     listed = client.get(f"/api/group-studio/{body['id']}/available-agents")
@@ -219,7 +219,7 @@ def test_available_agents_excludes_seated_and_default(client, monkeypatch):
     assert ids == {"writer", "reviewer"}
 
     added = client.post(f"/api/group-studio/{body['id']}/members", json={
-        "projectId": DEFAULT_PROJECT_ID,
+        "projectSlug": DEFAULT_PROJECT_ID,
         "agentId": "writer",
     })
     assert added.status_code == 200, added.text
@@ -230,7 +230,7 @@ def test_available_agents_excludes_seated_and_default(client, monkeypatch):
 def test_default_agent_cannot_join(client):
     body = _create(client)
     response = client.post(f"/api/group-studio/{body['id']}/members", json={
-        "projectId": DEFAULT_PROJECT_ID,
+        "projectSlug": DEFAULT_PROJECT_ID,
         "agentId": "default",
     })
     assert response.status_code == 403
@@ -240,17 +240,17 @@ def test_default_agent_cannot_join(client):
 def test_add_member_and_already_member(client, monkeypatch):
     monkeypatch.setattr(
         "src.group_studio.service._resolve_worker",
-        lambda agent_id, workspace_id: {"id": agent_id, "name": "写手", "role": "chat"},
+        lambda agent_id: {"id": agent_id, "name": "写手", "role": "chat"},
     )
     body = _create(client)
     first = client.post(f"/api/group-studio/{body['id']}/members", json={
-        "projectId": DEFAULT_PROJECT_ID,
+        "projectSlug": DEFAULT_PROJECT_ID,
         "agentId": "writer",
     })
     assert first.status_code == 200, first.text
     assert first.json()["role"] == "worker"
     second = client.post(f"/api/group-studio/{body['id']}/members", json={
-        "projectId": DEFAULT_PROJECT_ID,
+        "projectSlug": DEFAULT_PROJECT_ID,
         "agentId": "writer",
     })
     assert second.status_code == 409
@@ -260,11 +260,11 @@ def test_add_member_and_already_member(client, monkeypatch):
 def test_snapshot_current_speaker_follows_running_member(client, monkeypatch):
     monkeypatch.setattr(
         "src.group_studio.service._resolve_worker",
-        lambda agent_id, _workspace_id: {"id": agent_id, "name": "写手", "role": "chat"},
+        lambda agent_id: {"id": agent_id, "name": "写手", "role": "chat"},
     )
     body = _create(client)
     added = client.post(f"/api/group-studio/{body['id']}/members", json={
-        "projectId": DEFAULT_PROJECT_ID,
+        "projectSlug": DEFAULT_PROJECT_ID,
         "agentId": "writer",
     })
     assert added.status_code == 200, added.text
@@ -286,12 +286,12 @@ def test_snapshot_current_speaker_follows_running_member(client, monkeypatch):
 def test_close_requires_confirm_and_marks_done(client):
     body = _create(client)
     denied = client.post(f"/api/group-studio/{body['id']}/close", json={
-        "projectId": DEFAULT_PROJECT_ID,
+        "projectSlug": DEFAULT_PROJECT_ID,
         "confirm": False,
     })
     assert denied.status_code == 409
     closed = client.post(f"/api/group-studio/{body['id']}/close", json={
-        "projectId": DEFAULT_PROJECT_ID,
+        "projectSlug": DEFAULT_PROJECT_ID,
         "confirm": True,
     })
     assert closed.status_code == 200, closed.text
@@ -352,19 +352,19 @@ def test_fresh_snapshot_has_null_last_turn(client):
 def test_enqueue_handoff_appends_and_ignores_invalid(client, monkeypatch):
     monkeypatch.setattr(
         "src.group_studio.service._resolve_worker",
-        lambda agent_id, _workspace_id: {"id": agent_id, "name": agent_id, "role": "chat"},
+        lambda agent_id: {"id": agent_id, "name": agent_id, "role": "chat"},
     )
     body = _create(client)
     first = client.post(f"/api/group-studio/{body['id']}/members", json={
-        "projectId": DEFAULT_PROJECT_ID,
+        "projectSlug": DEFAULT_PROJECT_ID,
         "agentId": "writer",
     })
     second = client.post(f"/api/group-studio/{body['id']}/members", json={
-        "projectId": DEFAULT_PROJECT_ID,
+        "projectSlug": DEFAULT_PROJECT_ID,
         "agentId": "reviewer",
     })
     third = client.post(f"/api/group-studio/{body['id']}/members", json={
-        "projectId": DEFAULT_PROJECT_ID,
+        "projectSlug": DEFAULT_PROJECT_ID,
         "agentId": "editor",
     })
     assert first.status_code == 200 and second.status_code == 200 and third.status_code == 200
@@ -379,7 +379,7 @@ def test_enqueue_handoff_appends_and_ignores_invalid(client, monkeypatch):
     assert enqueue_handoff(group_id, speaker, speaker) is False
     assert enqueue_handoff(group_id, speaker, remaining) is False
     muted = client.post(f"/api/group-studio/{group_id}/members/{extra}/mute", json={
-        "projectId": DEFAULT_PROJECT_ID,
+        "projectSlug": DEFAULT_PROJECT_ID,
         "muted": True,
     })
     assert muted.status_code == 200
@@ -391,22 +391,22 @@ def test_enqueue_handoff_appends_and_ignores_invalid(client, monkeypatch):
 def test_human_message_sets_last_turn_and_rerun(client, monkeypatch):
     monkeypatch.setattr(
         "src.group_studio.service._resolve_worker",
-        lambda agent_id, _workspace_id: {"id": agent_id, "name": agent_id, "role": "chat"},
+        lambda agent_id: {"id": agent_id, "name": agent_id, "role": "chat"},
     )
     body = _create(client)
     first = client.post(f"/api/group-studio/{body['id']}/members", json={
-        "projectId": DEFAULT_PROJECT_ID,
+        "projectSlug": DEFAULT_PROJECT_ID,
         "agentId": "writer",
     })
     second = client.post(f"/api/group-studio/{body['id']}/members", json={
-        "projectId": DEFAULT_PROJECT_ID,
+        "projectSlug": DEFAULT_PROJECT_ID,
         "agentId": "reviewer",
     })
     assert first.status_code == 200 and second.status_code == 200
     left = first.json()["id"]
     right = second.json()["id"]
     posted = client.post(f"/api/group-studio/{body['id']}/messages", json={
-        "projectId": DEFAULT_PROJECT_ID,
+        "projectSlug": DEFAULT_PROJECT_ID,
         "body": "请两位各说一次",
         "mentions": [left, right],
     })
@@ -417,12 +417,12 @@ def test_human_message_sets_last_turn_and_rerun(client, monkeypatch):
     assert after_send["canRerun"] is False
     assert all(item["role"] != "host" for item in after_send["messages"])
 
-    busy = client.post(f"/api/group-studio/{body['id']}/rerun", json={"projectId": DEFAULT_PROJECT_ID})
+    busy = client.post(f"/api/group-studio/{body['id']}/rerun", json={"projectSlug": DEFAULT_PROJECT_ID})
     assert busy.status_code == 409
     assert busy.json()["detail"] == STUDIO_BUSY
     assert client.get(f"/api/group-studio/{body['id']}").json()["speakerQueue"] == [left, right]
 
-    stopped = client.post(f"/api/group-studio/{body['id']}/interrupt", json={"projectId": DEFAULT_PROJECT_ID})
+    stopped = client.post(f"/api/group-studio/{body['id']}/interrupt", json={"projectSlug": DEFAULT_PROJECT_ID})
     assert stopped.status_code == 200
     ready = client.get(f"/api/group-studio/{body['id']}").json()
     assert ready["speakerQueue"] == []
@@ -430,7 +430,7 @@ def test_human_message_sets_last_turn_and_rerun(client, monkeypatch):
     assert ready["lastTurn"]["mentions"] == [left, right]
     count_before = len(ready["messages"])
 
-    rerun = client.post(f"/api/group-studio/{body['id']}/rerun", json={"projectId": DEFAULT_PROJECT_ID})
+    rerun = client.post(f"/api/group-studio/{body['id']}/rerun", json={"projectSlug": DEFAULT_PROJECT_ID})
     assert rerun.status_code == 200, rerun.text
     after = rerun.json()
     assert after["speakerQueue"] == [left, right]
@@ -442,40 +442,40 @@ def test_human_message_sets_last_turn_and_rerun(client, monkeypatch):
 def test_rerun_guards(client, monkeypatch):
     monkeypatch.setattr(
         "src.group_studio.service._resolve_worker",
-        lambda agent_id, _workspace_id: {"id": agent_id, "name": agent_id, "role": "chat"},
+        lambda agent_id: {"id": agent_id, "name": agent_id, "role": "chat"},
     )
     body = _create(client)
-    missing = client.post(f"/api/group-studio/{body['id']}/rerun", json={"projectId": DEFAULT_PROJECT_ID})
+    missing = client.post(f"/api/group-studio/{body['id']}/rerun", json={"projectSlug": DEFAULT_PROJECT_ID})
     assert missing.status_code == 409
     assert missing.json()["detail"] == NO_LAST_TURN
 
     added = client.post(f"/api/group-studio/{body['id']}/members", json={
-        "projectId": DEFAULT_PROJECT_ID,
+        "projectSlug": DEFAULT_PROJECT_ID,
         "agentId": "writer",
     })
     assert added.status_code == 200
     member_id = added.json()["id"]
     posted = client.post(f"/api/group-studio/{body['id']}/messages", json={
-        "projectId": DEFAULT_PROJECT_ID,
+        "projectSlug": DEFAULT_PROJECT_ID,
         "body": "你来说",
         "mentions": [member_id],
     })
     assert posted.status_code == 200
-    client.post(f"/api/group-studio/{body['id']}/interrupt", json={"projectId": DEFAULT_PROJECT_ID})
+    client.post(f"/api/group-studio/{body['id']}/interrupt", json={"projectSlug": DEFAULT_PROJECT_ID})
 
-    paused = client.post(f"/api/group-studio/{body['id']}/pause", json={"projectId": DEFAULT_PROJECT_ID})
+    paused = client.post(f"/api/group-studio/{body['id']}/pause", json={"projectSlug": DEFAULT_PROJECT_ID})
     assert paused.status_code == 200
-    denied = client.post(f"/api/group-studio/{body['id']}/rerun", json={"projectId": DEFAULT_PROJECT_ID})
+    denied = client.post(f"/api/group-studio/{body['id']}/rerun", json={"projectSlug": DEFAULT_PROJECT_ID})
     assert denied.status_code == 409
     assert denied.json()["detail"] == STUDIO_NOT_OPEN
 
-    client.post(f"/api/group-studio/{body['id']}/resume", json={"projectId": DEFAULT_PROJECT_ID})
+    client.post(f"/api/group-studio/{body['id']}/resume", json={"projectSlug": DEFAULT_PROJECT_ID})
     muted = client.post(f"/api/group-studio/{body['id']}/members/{member_id}/mute", json={
-        "projectId": DEFAULT_PROJECT_ID,
+        "projectSlug": DEFAULT_PROJECT_ID,
         "muted": True,
     })
     assert muted.status_code == 200
-    empty = client.post(f"/api/group-studio/{body['id']}/rerun", json={"projectId": DEFAULT_PROJECT_ID})
+    empty = client.post(f"/api/group-studio/{body['id']}/rerun", json={"projectSlug": DEFAULT_PROJECT_ID})
     assert empty.status_code == 409
     assert empty.json()["detail"] == NO_ELIGIBLE_SPEAKER
     assert client.get(f"/api/group-studio/{body['id']}").json()["speakerQueue"] == []
@@ -484,15 +484,15 @@ def test_rerun_guards(client, monkeypatch):
 def test_interrupt_clears_wave_spoken(client, monkeypatch):
     monkeypatch.setattr(
         "src.group_studio.service._resolve_worker",
-        lambda agent_id, _workspace_id: {"id": agent_id, "name": agent_id, "role": "chat"},
+        lambda agent_id: {"id": agent_id, "name": agent_id, "role": "chat"},
     )
     body = _create(client)
     added = client.post(f"/api/group-studio/{body['id']}/members", json={
-        "projectId": DEFAULT_PROJECT_ID,
+        "projectSlug": DEFAULT_PROJECT_ID,
         "agentId": "writer",
     })
     note_wave_spoken(body["id"], added.json()["id"])
     assert get_wave_spoken(body["id"]) == [added.json()["id"]]
-    stopped = client.post(f"/api/group-studio/{body['id']}/interrupt", json={"projectId": DEFAULT_PROJECT_ID})
+    stopped = client.post(f"/api/group-studio/{body['id']}/interrupt", json={"projectSlug": DEFAULT_PROJECT_ID})
     assert stopped.status_code == 200
     assert get_wave_spoken(body["id"]) == []

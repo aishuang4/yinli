@@ -19,21 +19,27 @@ PATH_FUNCTIONS = [
     runtime_paths.team_runtime_root,
     runtime_paths.sandbox_root,
     runtime_paths.skill_packages_root,
-    runtime_paths.legacy_skill_packages_root,
     runtime_paths.subagent_root,
-    runtime_paths.legacy_subagent_root,
-    runtime_paths.workspaces_catalog_root,
+    runtime_paths.agents_root,
     runtime_paths.projects_root,
-    runtime_paths.default_project_root,
+    runtime_paths.project_default_root,
 ]
 
 
+def _session_demo() -> Path:
+    return runtime_paths.session_root("demo")
+
+
 def test_paths_are_scoped_to_each_tenant():
+    functions = [*PATH_FUNCTIONS, _session_demo]
     with use_tenant(TenantContext.hosted(HOSTED_A)):
-        paths_a = [fn() for fn in PATH_FUNCTIONS]
+        paths_a = [fn() for fn in functions]
         assert runtime_paths.user_home_root() is None
+        assert runtime_paths.session_root("demo") == runtime_paths.tenant_root() / "sessions" / "demo"
+        assert runtime_paths.project_default_root() == runtime_paths.projects_root() / "default"
+        assert runtime_paths.agents_root() == runtime_paths.tenant_root() / "agents"
     with use_tenant(TenantContext.hosted(HOSTED_B)):
-        paths_b = [fn() for fn in PATH_FUNCTIONS]
+        paths_b = [fn() for fn in functions]
 
     assert paths_a != paths_b
     for path_a, path_b in zip(paths_a, paths_b):
@@ -46,7 +52,7 @@ def test_paths_are_scoped_to_each_tenant():
 def test_local_tenant_paths_stay_under_user_data_root():
     ctx = TenantContext.local()
     with use_tenant(ctx):
-        for fn in PATH_FUNCTIONS[:-1]:  # default_project_root 在桌面可以是仓库根
+        for fn in [*PATH_FUNCTIONS, _session_demo]:
             assert fn().is_relative_to(runtime_paths.USER_DATA_ROOT)
         assert runtime_paths.user_home_root() == runtime_paths.USER_HOME_ROOT
 
@@ -58,12 +64,16 @@ def test_ensure_tenant_directories_runs_once_per_tenant():
         runtime_paths.ensure_tenant_directories()
         for fn in (
             runtime_paths.data_root,
-            runtime_paths.default_project_root,
+            runtime_paths.project_default_root,
             runtime_paths.skill_packages_root,
             runtime_paths.subagent_root,
-            runtime_paths.workspaces_catalog_root,
+            runtime_paths.agents_root,
         ):
             assert fn().is_dir()
+        assert (runtime_paths.agents_root() / "profiles").is_dir()
+        assert (runtime_paths.agents_root() / "_system" / "profiles").is_dir()
+        assert (runtime_paths.tenant_root() / "sessions").is_dir()
+        assert runtime_paths.session_root("demo") == runtime_paths.tenant_root() / "sessions" / "demo"
 
 
 def test_legacy_path_constants_are_gone_from_source():

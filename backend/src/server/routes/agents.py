@@ -11,9 +11,9 @@ Agent 管理路由
 """
 
 import os
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
-from typing import Annotated, Optional
+from typing import Optional
 from datetime import datetime, timezone
 import uuid
 
@@ -112,7 +112,6 @@ class AgentCreate(BaseModel):
     tags: list[str] = Field(default_factory=list, description="标签")
     plan_config: PlanConfig = Field(default_factory=PlanConfig, alias="planConfig", description="历史兼容字段：旧计划模型配置")
     guardrails: Guardrails = Field(default_factory=Guardrails, description="安全边界配置")
-    workspace_id: str = Field(default="default", alias="workspaceId")
     role: str = Field(default="chat", description="chat=对话助手，job=定时任务执行者")
     job_toolkit: JobToolkit = Field(default_factory=JobToolkit, alias="jobToolkit")
 
@@ -220,7 +219,7 @@ def _apply_job_agent_fields(
     knowledge_tools: list[str],
     skills: list[str],
 ) -> tuple[str, JobToolkit, Guardrails, list[str], list[str], list[str]]:
-    """校验角色并同步绑定字段。Job Agent 强制可信工具。"""
+    """校验角色并同步绑定字段。"""
 
     parsed_role = parse_agent_role(role)
     toolkit = parse_job_toolkit(job_toolkit)
@@ -238,11 +237,6 @@ def _apply_job_agent_fields(
         mcp_tools = list(bound["mcp"])
         knowledge_tools = list(dict.fromkeys([*bound["http"], *bound["knowledge"]]))
         skills = list(bound["skill"])
-        guardrails = guardrails.model_copy(update={
-            "human_approval": False,
-            "tool_permission_profile": "trusted_tools",
-            "tool_permission_mode": "bypass",
-        })
     else:
         toolkit = empty_job_toolkit()
     return parsed_role, toolkit, guardrails, mcp_tools, knowledge_tools, skills
@@ -259,11 +253,11 @@ def _sync_agents_from_catalog() -> None:
 
 
 def _load_agents() -> None:
-    from src.catalog.migrate_agents import ensure_agent_file_catalog
+    from src.catalog.loader import invalidate_catalog
     from src.catalog.skill_seed import seed_yinli_catalog_skill
 
     seed_yinli_catalog_skill()
-    ensure_agent_file_catalog()
+    invalidate_catalog()
     _sync_agents_from_catalog()
     _ensure_system_agents()
     _sync_agents_from_catalog()
@@ -302,16 +296,6 @@ def get_registered_agent(agent_id: str) -> AgentResponse | None:
 def list_registered_agents() -> list[AgentResponse]:
     """Return persisted Agent configurations for internal matching logic."""
     return list(_agents.values())
-
-
-def list_workspace_agents(workspace_id: str) -> list[AgentResponse]:
-    """当前 Workspace 可见的用户 Agent 与系统 Agent。"""
-
-    return [
-        agent
-        for agent in _agents.values()
-        if is_system_agent_id(agent.id) or agent.workspace_id == workspace_id
-    ]
 
 
 def remove_mcp_tools_from_agents(tool_ids: set[str]) -> int:
@@ -367,9 +351,7 @@ def remove_skills_from_agents(skill_ids: set[str]) -> int:
 
 
 @router.get("", response_model=list[AgentResponse])
-async def list_agents(
-    workspace_id: Annotated[str, Query(alias="workspaceId")] = "default",
-) -> list[AgentResponse]:
+async def list_agents() -> list[AgentResponse]:
     """
     获取所有 Agent 列表
 
@@ -377,11 +359,7 @@ async def list_agents(
         list[AgentResponse]: Agent 列表
     """
     _sync_agents_from_catalog()
-    return [
-        agent
-        for agent in _agents.values()
-        if is_system_agent_id(agent.id) or agent.workspace_id == workspace_id
-    ]
+    return list(_agents.values())
 
 
 @router.get("/{agent_id}/export", response_model=AgentExportPackage)
@@ -467,7 +445,6 @@ async def create_agent(data: AgentCreate) -> AgentResponse:
         "status": "idle",
         "created_at": now,
         "updated_at": now,
-        "workspaceId": data.workspace_id,
         "role": role,
         "jobToolkit": toolkit.model_dump(),
     })
@@ -544,12 +521,7 @@ async def update_agent(agent_id: str, data: AgentUpdate) -> AgentResponse:
         if is_default_websearch_job_agent_id(agent_id):
             existing_dict["role"] = JOB_ROLE
             guardrails = Guardrails.model_validate(existing_dict.get("guardrails") or {})
-            guardrails = guardrails.model_copy(update={
-                "network_enabled": True,
-                "human_approval": False,
-                "tool_permission_profile": "trusted_tools",
-                "tool_permission_mode": "bypass",
-            })
+            guardrails = guardrails.model_copy(update={"network_enabled": True})
             existing_dict["guardrails"] = guardrails
         role, toolkit, guardrails, mcp_tools, knowledge_tools, skills = _apply_job_agent_fields(
             agent_id=agent_id,

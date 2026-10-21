@@ -10,7 +10,6 @@ from src.memory.markdown_store import MarkdownMemoryStore
 from src.memory.nodes import MemoryNodeService, MemoryNodeWrite
 from src.memory.prompt_cache import invalidate_memory_prompts
 from src.memory.settings import get_memory_admission_policy, save_memory_admission_policy
-from src.memory.skill_evolution import register_skill_evolution_record
 from src.memory.timeline import search_timeline
 from src.memory.trace import MEMORY_AUDIT_EVENT_TYPE, record_memory_audit_event
 from src.server.routes.memory_api.models import *
@@ -19,14 +18,11 @@ from src.storage.database import (
     count_pending_memory_markdown_candidates,
     get_memory_markdown_candidate,
     get_memory_node,
-    get_skill_evolution_record,
     list_memory_markdown_candidates,
     list_run_events_by_type,
-    list_skill_evolution_records,
     record_memory_retrieval_feedback,
     set_memory_markdown_candidate_status,
     update_memory_node_status,
-    update_skill_evolution_record_status,
 )
 from src.vector_store.policy import get_vector_store_policy
 
@@ -72,8 +68,7 @@ async def write_professional_memory(agent_id: str, data: MarkdownMemoryUpdate) -
 
 @router.get("/timeline")
 async def read_memory_timeline(
-    workspace_id: str = Query(default="", alias="workspaceId"),
-    project_id: str = Query(default="", alias="projectId"),
+    project_slug: str = Query(default="", alias="projectSlug"),
     agent_id: str = Query(default="", alias="agentId"),
     surface: str = Query(default=""),
     time_from: str = Query(default="", alias="timeFrom"),
@@ -84,8 +79,7 @@ async def read_memory_timeline(
     """按标签和时间查看时间线原文，不调用模型。"""
 
     return search_timeline(
-        workspace_id=workspace_id,
-        project_id=project_id,
+        project_slug=project_slug,
         agent_id=agent_id,
         surface=surface,
         time_from=time_from,

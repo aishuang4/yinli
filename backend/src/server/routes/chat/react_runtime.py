@@ -25,8 +25,10 @@ from src.server.routes.chat.leader_stream import LeaderStreamState
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.plan_mode.manager import PlanModeManager
 from src.server.routes.chat.plan_mode.middleware import PlanModeMiddleware
+from src.server.routes.chat.prompts import compose_turn_user_text
 from src.server.routes.chat.skill_context_middleware import (
-    activate_forced_skills,
+    ScheduledSkillPreloadError,
+    preload_scheduled_skills,
     restore_activated_skills,
 )
 from src.server.routes.chat.steer_middleware import RunSteerMiddleware
@@ -133,13 +135,12 @@ def _build_runtime_feature_parts(
         feature_keys.append("run-steer:skill-context:context-governance")
         if ctx.persist_run:
             job_tools = build_scheduled_job_tools(
-                workspace_id=ctx.runtime_context.workspace_id,
-                project_id=ctx.runtime_context.project_id,
+                project_slug=ctx.runtime_context.project_slug,
                 agent_id=ctx.agent_id,
                 session_id=ctx.session_id,
             )
             extra_tools.extend(job_tools)
-            prompt_addenda.append(scheduled_job_prompt_addendum(ctx.runtime_context.workspace_id))
+            prompt_addenda.append(scheduled_job_prompt_addendum())
             feature_keys.append(scheduled_job_tools_cache_key(job_tools))
 
     catalog = load_subagent_catalog(workspace_dir=str(ctx.runtime_context.project_root))
@@ -270,6 +271,7 @@ async def execute_react_runtime(
             runtime_tool_scope=ctx.runtime_tool_scope,
             guardrail_cache_key=_guardrail_cache_key(ctx.guardrails),
             runtime_features_cache_key=runtime_features_cache_key,
+            skill_loading_mode=str(getattr(ctx, "skill_loading_mode", "interactive_on_demand") or "interactive_on_demand"),
             extra_tools=extra_tools,
             tool_name_denylist=(
                 set(getattr(ctx, "tool_name_denylist", None) or set())
@@ -341,17 +343,33 @@ async def execute_react_runtime(
             recent_skill_names=list_recent_skill_run_names(ctx.session_id, ctx.agent_id),
             available_skills=ctx.used_skills,
         )
-    activate_forced_skills(agent, getattr(ctx, "forced_skills", None) or [])
+    if str(getattr(ctx, "skill_loading_mode", "") or "") == "scheduled_preloaded":
+        try:
+            preload_scheduled_skills(agent, ctx.used_skills)
+        except ScheduledSkillPreloadError as exc:
+            async for failure_event in emit_failed_startup_run(
+                session_id=ctx.session_id,
+                persist=ctx.persist_run,
+                agent_id=ctx.agent_id,
+                agent_name=ctx.agent_name,
+                model_name=ctx.model_name,
+                assistant_error=str(exc),
+                skill_runs=ctx.skill_runs,
+                sandbox=run_data.sandbox,
+            ):
+                yield failure_event
+            return
     if getattr(ctx, "force_compress", False):
         from src.server.routes.chat.context_middleware import force_compress_context
 
         await force_compress_context(agent)
         if ctx.session_id and ctx.persist_run:
             persist_agent_session_state(agent, session_id=ctx.session_id, agent_id=ctx.agent_id)
-    user_text = ctx.effective_user_message
-    note = str(getattr(ctx, "user_message_note", "") or "")
-    if note:
-        user_text = f"{user_text}\n\n{note}"
+    user_text = compose_turn_user_text(
+        message=ctx.effective_user_message,
+        skill_message=str(getattr(ctx, "forced_skill_message", "") or ""),
+        note=str(getattr(ctx, "user_message_note", "") or ""),
+    )
     user_msg = UserMsg(
         name="user",
         content=_build_user_content(

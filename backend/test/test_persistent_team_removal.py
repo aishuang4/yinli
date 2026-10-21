@@ -25,7 +25,7 @@ def test_agent_builder_rejects_legacy_team_mode() -> None:
 
 
 def test_startup_removes_legacy_team_storage(tmp_path, monkeypatch) -> None:
-    db_path = tmp_path / "agent_workstation.db"
+    db_path = tmp_path / "state.db"
     with sqlite3.connect(db_path) as conn:
         conn.executescript("""
             CREATE TABLE json_store (

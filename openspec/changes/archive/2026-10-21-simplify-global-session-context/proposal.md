@@ -1,5 +1,7 @@
 # Proposal
 
+> 已被 `docs/context-storage-refactor.md` 取代。下面任务清单里的勾选不代表对应代码已经存在；归属模型改由该方案实施，本提案不再作为实现依据。
+
 ## Why
 
 当前系统同时把 Workspace、Project、Project root、AgentScope Workspace 和 Project 内 `.agent-workstation` 目录作为上下文边界，导致同一资源在全局目录、Workspace 策略、Project binding、Agent 配置和 Runtime 之间重复判定。产品实际以对话持续完成任务，继续维护 Workspace → Project → Session 三层归属只会扩大数据迁移、权限和“可见但不可用”的不一致，应收敛为用户全局根与 Session 根两层。

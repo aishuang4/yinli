@@ -120,12 +120,14 @@ def test_shared_user_skill_joins_catalog(stub_installed) -> None:
 def test_frozen_job_skills_do_not_append_shared(stub_installed) -> None:
     """定时任务冻结集为空时，不得因共享开关追加办公包。"""
 
-    bound = run_context._resolve_frozen_runtime_skills(
-        [],
-        agent_config=SimpleNamespace(skills=[]),
-        project_resources=SimpleNamespace(filter_ids=lambda _kind, ids: list(ids)),
+    from src.runtime.capabilities import resolve_capabilities
+
+    bound = resolve_capabilities(
+        mode="frozen",
+        agent=SimpleNamespace(skills=[]),
+        frozen=[],
     )
-    assert bound == []
+    assert bound.skills == ()
 
 
 def test_skill_context_prompt_stays_on_demand() -> None:

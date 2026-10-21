@@ -1,4 +1,4 @@
-"""Workspace / Project Phase 0 至 Phase 2 回归测试。"""
+"""Project slug、默认项目与目录授权回归。"""
 
 from __future__ import annotations
 
@@ -12,9 +12,10 @@ from fastapi import HTTPException
 from starlette.datastructures import UploadFile
 
 from src.agents.factory import AgentGuardrails
+from src.config.runtime_paths import project_default_root
 from src.memory.nodes import MemoryNodeService, MemoryNodeWrite
-from src.project_resources import resolve_project_resource_access
-from src.runtime_context import resolve_runtime_context
+from src.project_resources import grant_roots, load_project_access
+from src.runtime_context import FolderGrant, resolve_runtime_context
 from src.project_files import (
     delete_project_session_files,
     list_project_session_artifacts,
@@ -35,39 +36,30 @@ from src.server.routes.chat.run_context import build_chat_run_context
 from src.server.routes.chat.runtime import scope_guardrails_to_project
 from src.storage.agent_defaults import is_stale_desktop_default_project_path
 from src.server.routes.chat.store import _append_user_message
-from src.server.routes.workspaces import (
+from src.server.routes.projects import (
     ProjectCreateRequest,
-    ProjectResourceBindingRequest,
-    WorkspaceBootstrapRequest,
-    _validated_project_paths,
-    bootstrap_workspace,
+    ProjectFolderCreateRequest,
+    ProjectFolderInput,
+    add_project_folder_record,
     create_project_record,
-    put_project_resource,
 )
 from src.storage import database
 from src.storage.database import (
     DEFAULT_PROJECT_ID,
-    DEFAULT_WORKSPACE_ID,
     append_run_event,
     create_project,
     create_subagent_invocation,
-    create_workspace,
     ensure_db,
     get_chat_session_location,
     get_project,
-    get_workspace,
     list_chat_runs,
     list_memory_nodes,
-    list_project_resource_bindings,
+    list_projects,
     list_subagent_invocations,
-    list_workspaces,
-    replace_mcp_servers,
-    replace_skills,
     upsert_agent,
     upsert_chat_run,
-    upsert_http_tool,
-    upsert_project_resource_binding,
 )
+from src.storage.project_records import ProjectNameError
 
 
 @pytest.fixture()
@@ -78,31 +70,37 @@ def isolated_db(tmp_path, monkeypatch):
     database.forget_db(database.db_path())
 
 
-def _create_project(tmp_path, *, workspace_id: str, project_id: str, name: str = "项目") -> dict:
-    root = tmp_path / project_id
+def _create_project(tmp_path, *, name: str) -> dict:
+    root = tmp_path / name
     root.mkdir()
     return create_project({
-        "id": project_id,
-        "workspace_id": workspace_id,
         "name": name,
-        "root_path": str(root),
+        "primaryPath": str(root),
     })
 
 
-def test_default_workspace_and_project_are_created(isolated_db):
+def test_default_project_uses_slug_and_primary_path(isolated_db):
     ensure_db()
 
-    workspace = get_workspace(DEFAULT_WORKSPACE_ID)
     project = get_project(DEFAULT_PROJECT_ID)
+    listed = list_projects()
 
-    assert workspace and workspace["status"] == "active"
-    assert project and project["workspaceId"] == DEFAULT_WORKSPACE_ID
-    from src.config.runtime_paths import default_project_root
+    assert project is not None
+    assert project["slug"] == "default"
+    assert project["name"]
+    assert project["status"] == "active"
+    assert "rootPath" not in project
+    assert "workspaceId" not in project
+    assert project["primaryPath"] == str(project_default_root("default"))
+    assert project["folders"][0]["path"] == project["primaryPath"]
+    assert project["folders"][0]["accessMode"] == "readwrite"
+    assert project["folders"][0]["isPrimary"] is True
+    assert [item["slug"] for item in listed] == ["default"]
 
-    assert project["rootPath"] == str(default_project_root())
 
+def test_new_records_default_to_project_slug(isolated_db):
+    """新建会话、Run、记忆和 Subagent 记录默认落在 slug=default。"""
 
-def test_startup_backfills_blank_ownership(isolated_db):
     ensure_db()
     _append_user_message(
         session_id="session-old",
@@ -125,43 +123,43 @@ def test_startup_backfills_blank_ownership(isolated_db):
         agent_id="agent-1",
         node_date="2026-07-15",
         title="历史记忆",
-        summary="待回填归属",
+        summary="默认归属",
     ))
     invocation = create_subagent_invocation({"id": "subagent-old", "session_id": "session-old"})
 
-    with database._connect() as conn:
-        for table in ("chat_sessions", "chat_runs", "run_events", "memory_nodes", "subagent_invocations"):
-            conn.execute(f"UPDATE {table} SET workspace_id = '', project_id = ''")
-        conn.commit()
-    database.forget_db(database.db_path())
-    ensure_db()
-
-    assert get_chat_session_location("session-old") == {
-        "workspaceId": DEFAULT_WORKSPACE_ID,
-        "projectId": DEFAULT_PROJECT_ID,
-    }
-    assert list_chat_runs(project_id=DEFAULT_PROJECT_ID)[0]["projectId"] == DEFAULT_PROJECT_ID
-    assert list_memory_nodes(project_id=DEFAULT_PROJECT_ID)[0]["project_id"] == DEFAULT_PROJECT_ID
+    assert get_chat_session_location("session-old")["projectSlug"] == DEFAULT_PROJECT_ID
+    assert list_chat_runs(project_slug=DEFAULT_PROJECT_ID)[0]["projectSlug"] == DEFAULT_PROJECT_ID
+    assert list_memory_nodes(project_slug=DEFAULT_PROJECT_ID)[0]["project_slug"] == DEFAULT_PROJECT_ID
     assert list_subagent_invocations(project_id=DEFAULT_PROJECT_ID)[0]["id"] == invocation["id"]
 
 
-def test_project_api_validates_root_and_instructions(isolated_db, tmp_path):
-    workspace = create_workspace({"id": "ws-docs", "name": "文档工作区"})
+def test_project_api_validates_directory_grants(isolated_db, tmp_path):
     root = tmp_path / "docs-project"
     root.mkdir()
-    (root / "AGENTS.md").write_text("# Instructions", encoding="utf-8")
+    extra = tmp_path / "readonly"
+    extra.mkdir()
 
-    project = asyncio.run(create_project_record(
-        workspace["id"],
-        ProjectCreateRequest(name="文档项目", rootPath=str(root), instructionsFile="AGENTS.md"),
-    ))
+    project = asyncio.run(create_project_record(ProjectCreateRequest(
+        name="Docs",
+        primaryPath=str(root),
+        folders=[ProjectFolderInput(path=str(extra), accessMode="read")],
+    )))
 
-    assert project.root_path == str(root.resolve())
-    assert project.instructions_file == "AGENTS.md"
-    with pytest.raises(HTTPException, match="instructionsFile"):
-        _validated_project_paths(str(root), "../outside.md")
-    with pytest.raises(HTTPException, match="Project root"):
-        _validated_project_paths(str(root / "missing"))
+    assert project.slug == "docs"
+    assert project.primary_path == str(root.resolve())
+    modes = {item.path: item.access_mode for item in project.folders}
+    assert modes[str(root.resolve())] == "readwrite"
+    assert modes[str(extra.resolve())] == "read"
+    with pytest.raises(HTTPException):
+        asyncio.run(create_project_record(ProjectCreateRequest(
+            name="Missing",
+            primaryPath=str(root / "missing"),
+        )))
+    with pytest.raises((HTTPException, ProjectNameError)):
+        asyncio.run(add_project_folder_record(
+            project.slug,
+            ProjectFolderCreateRequest(path=str(root / ".." / "outside"), accessMode="read"),
+        ))
 
 
 def test_uploads_are_isolated_by_session(tmp_path):
@@ -295,9 +293,8 @@ def test_write_artifact_event_skips_word_intermediates():
 def test_delete_session_removes_its_uploaded_and_generated_files(isolated_db, tmp_path):
     """Chat 删除同时清理同一会话的附件和 Agent 产物目录。"""
 
-    workspace = create_workspace({"id": "ws-delete", "name": "删除工作区"})
-    project = _create_project(tmp_path, workspace_id=workspace["id"], project_id="project-delete")
-    project_root = Path(project["rootPath"])
+    project = _create_project(tmp_path, name="Delete Files")
+    project_root = Path(project["primaryPath"])
     _append_user_message(
         session_id="session-delete",
         agent_id="agent-1",
@@ -306,38 +303,35 @@ def test_delete_session_removes_its_uploaded_and_generated_files(isolated_db, tm
         model_name="model",
         content="请处理文件",
         images=[],
-        workspace_id=workspace["id"],
-        project_id=project["id"],
+        project_slug=project["slug"],
     )
     uploaded = project_upload_directory(project_root, "session-delete")
     generated = project_session_directory(project_root, "session-delete")
     uploaded.joinpath("source.docx").write_bytes(b"source")
     generated.joinpath("result.docx").write_bytes(b"result")
 
-    asyncio.run(delete_session("session-delete", project_id=project["id"]))
+    asyncio.run(delete_session("session-delete", project_slug=project["slug"]))
 
     assert not uploaded.exists()
     assert not generated.exists()
     assert all(item.id != "session-delete" for item in asyncio.run(list_session_catalog()))
 
 
-def test_workspace_bootstrap_validates_project_before_creating_workspace(isolated_db, tmp_path):
-    """组合创建必须先校验 root，避免留下没有 Project 的空 Workspace。"""
+def test_invalid_primary_path_does_not_create_project(isolated_db, tmp_path):
+    """非法主目录不会留下半成品 Project。"""
 
-    before_ids = {item["id"] for item in list_workspaces()}
-    with pytest.raises(HTTPException, match="Project root"):
-        asyncio.run(bootstrap_workspace(WorkspaceBootstrapRequest(
-            workspaceName="不会创建",
-            name="无效项目",
-            rootPath=str(tmp_path / "missing"),
+    before = {item["slug"] for item in list_projects()}
+    with pytest.raises(HTTPException):
+        asyncio.run(create_project_record(ProjectCreateRequest(
+            name="Invalid",
+            primaryPath=str(tmp_path / "missing"),
         )))
-    assert {item["id"] for item in list_workspaces()} == before_ids
+    assert {item["slug"] for item in list_projects()} == before
 
 
 def test_session_cannot_continue_in_another_project(isolated_db, tmp_path):
-    create_workspace({"id": "ws-chat", "name": "Chat 工作区"})
-    project_a = _create_project(tmp_path, workspace_id="ws-chat", project_id="project-a")
-    project_b = _create_project(tmp_path, workspace_id="ws-chat", project_id="project-b")
+    project_a = _create_project(tmp_path, name="Project A")
+    project_b = _create_project(tmp_path, name="Project B")
     _append_user_message(
         session_id="session-a",
         agent_id="agent-1",
@@ -346,20 +340,20 @@ def test_session_cannot_continue_in_another_project(isolated_db, tmp_path):
         model_name="model",
         content="属于 A",
         images=[],
-        workspace_id="ws-chat",
-        project_id=project_a["id"],
+        project_slug=project_a["slug"],
     )
 
     context = resolve_runtime_context(
-        project_id=project_a["id"],
+        project_slug=project_a["slug"],
         session_id="session-a",
         run_id="run-a",
         agent_id="agent-1",
     )
-    assert context.project_root == (tmp_path / "project-a").resolve()
+    assert context.project_slug == project_a["slug"]
+    assert context.project_root == Path(project_a["primaryPath"]).resolve()
     with pytest.raises(ValueError, match="不能在 Project"):
         resolve_runtime_context(
-            project_id=project_b["id"],
+            project_slug=project_b["slug"],
             session_id="session-a",
             run_id="run-b",
             agent_id="agent-1",
@@ -367,28 +361,26 @@ def test_session_cannot_continue_in_another_project(isolated_db, tmp_path):
 
 
 def test_session_catalog_keeps_project_ownership(isolated_db, tmp_path):
-    """历史目录可跨 Project 展示，但每条 Session 必须保留自己的归属。"""
+    """历史目录可跨 Project 展示，但每条 Session 必须保留自己的 slug。"""
 
-    create_workspace({"id": "ws-catalog", "name": "历史目录"})
-    for project_id in ("project-a", "project-b"):
-        _create_project(tmp_path, workspace_id="ws-catalog", project_id=project_id)
+    for name in ("Catalog A", "Catalog B"):
+        project = _create_project(tmp_path, name=name)
         _append_user_message(
-            session_id=f"session-{project_id}",
+            session_id=f"session-{project['slug']}",
             agent_id="agent-1",
             agent_name="Agent",
             mode="agent",
             model_name="model",
-            content=project_id,
+            content=name,
             images=[],
-            workspace_id="ws-catalog",
-            project_id=project_id,
+            project_slug=project["slug"],
         )
 
     catalog = asyncio.run(list_session_catalog())
-    ownership = {(item.id, item.workspace_id, item.project_id) for item in catalog}
+    ownership = {(item.id, item.project_slug) for item in catalog}
     assert ownership == {
-        ("session-project-a", "ws-catalog", "project-a"),
-        ("session-project-b", "ws-catalog", "project-b"),
+        ("session-catalog-a", "catalog-a"),
+        ("session-catalog-b", "catalog-b"),
     }
 
 
@@ -471,251 +463,130 @@ def test_stale_desktop_default_project_paths(tmp_path):
 
 
 def test_runtime_records_are_project_scoped(isolated_db, tmp_path):
-    create_workspace({"id": "ws-runtime", "name": "运行工作区"})
-    _create_project(tmp_path, workspace_id="ws-runtime", project_id="project-a")
-    _create_project(tmp_path, workspace_id="ws-runtime", project_id="project-b")
+    project_a = _create_project(tmp_path, name="Runtime A")
+    project_b = _create_project(tmp_path, name="Runtime B")
 
-    for project_id in ("project-a", "project-b"):
+    for project in (project_a, project_b):
+        slug = project["slug"]
         upsert_chat_run({
-            "id": f"run-{project_id}",
-            "sessionId": f"session-{project_id}",
-            "workspaceId": "ws-runtime",
-            "projectId": project_id,
+            "id": f"run-{slug}",
+            "sessionId": f"session-{slug}",
+            "projectSlug": slug,
             "status": "completed",
         })
         create_subagent_invocation({
-            "id": f"subagent-{project_id}",
-            "run_id": f"run-{project_id}",
-            "session_id": f"session-{project_id}",
-            "workspace_id": "ws-runtime",
-            "project_id": project_id,
+            "id": f"subagent-{slug}",
+            "run_id": f"run-{slug}",
+            "session_id": f"session-{slug}",
+            "project_slug": slug,
         })
         MemoryNodeService(vector_backend=_NoopVectorBackend()).upsert_node(MemoryNodeWrite(
-            id=f"memory-{project_id}",
-            workspace_id="ws-runtime",
-            project_id=project_id,
+            id=f"memory-{slug}",
+            project_slug=slug,
             agent_id="agent-1",
             node_date="2026-07-15",
-            title=project_id,
+            title=slug,
             summary="隔离测试",
         ))
 
-    assert [item["id"] for item in list_chat_runs(project_id="project-a")] == ["run-project-a"]
-    assert [item["id"] for item in list_subagent_invocations(project_id="project-a")] == ["subagent-project-a"]
-    assert [item["id"] for item in list_memory_nodes(
-        workspace_id="ws-runtime",
-        project_id="project-a",
-    )] == ["memory-project-a"]
+    assert [item["id"] for item in list_chat_runs(project_slug="runtime-a")] == ["run-runtime-a"]
+    assert [item["id"] for item in list_subagent_invocations(project_id="runtime-a")] == ["subagent-runtime-a"]
+    assert [item["id"] for item in list_memory_nodes(project_slug="runtime-a")] == ["memory-runtime-a"]
 
 
 def test_run_detail_actions_reject_another_project(monkeypatch):
-    """Run 详情、订阅和动作必须校验当前 Project，而不只依赖 runId。"""
+    """Run 详情、订阅和动作必须校验当前 Project slug。"""
 
     async def fake_get_run(run_id: str):
         assert run_id == "run-a"
-        return SimpleNamespace(project_id="project-a")
+        return SimpleNamespace(project_slug="project-a")
 
     monkeypatch.setattr(
         "src.server.routes.chat.handlers.runs.get_chat_background_run",
         fake_get_run,
     )
 
-    assert asyncio.run(_get_project_run("run-a", "project-a")).project_id == "project-a"
+    assert asyncio.run(_get_project_run("run-a", "project-a")).project_slug == "project-a"
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(_get_project_run("run-a", "project-b"))
     assert exc_info.value.status_code == 404
 
 
-def test_new_project_snapshots_workspace_resources(isolated_db, tmp_path):
-    """新 Project 只绑定创建时已经存在且属于同一 Workspace 的资源。"""
+def test_project_folders_record_directory_grants(isolated_db, tmp_path):
+    """新建 Project 记录主目录与额外目录授权，之后追加的目录也会留下。"""
 
-    create_workspace({"id": "ws-resources", "name": "资源工作区"})
-    upsert_agent({
-        "id": "agent-a",
-        "name": "Agent A",
-        "workspaceId": "ws-resources",
-    })
-    replace_skills({
-        "skill-a": {
-            "id": "skill-a",
-            "name": "Skill A",
-            "description": "",
-            "category": "test",
-            "status": "installed",
-            "enabled": True,
-            "updatedAt": "2026-07-16T00:00:00+00:00",
-            "workspaceId": "ws-resources",
-        },
-    })
-    replace_mcp_servers({
-        "mcp-a": {
-            "id": "mcp-a",
-            "name": "MCP A",
-            "description": "",
-            "category": "test",
-            "transport": "sse",
-            "status": "installed",
-            "enabled": True,
-            "updatedAt": "2026-07-16T00:00:00+00:00",
-            "workspaceId": "ws-resources",
-        },
-    })
-    upsert_http_tool({
-        "id": "http-a",
-        "name": "HTTP A",
-        "url": "https://example.com/api",
-        "workspaceId": "ws-resources",
-    })
-
-    project = _create_project(
-        tmp_path,
-        workspace_id="ws-resources",
-        project_id="project-resources",
-    )
-    bindings = {
-        (item["resourceType"], item["resourceId"])
-        for item in list_project_resource_bindings(project["id"])
-        if item["enabled"]
-    }
-    assert bindings == {
-        ("agent", "agent-a"),
-        ("skill", "skill-a"),
-        ("mcp", "mcp-a"),
-        ("http_tool", "http-a"),
-    }
-
-    upsert_http_tool({
-        "id": "http-later",
-        "name": "稍后创建",
-        "url": "https://example.com/later",
-        "workspaceId": "ws-resources",
-    })
-    assert ("http_tool", "http-later") not in {
-        (item["resourceType"], item["resourceId"])
-        for item in list_project_resource_bindings(project["id"])
-    }
+    later = tmp_path / "later"
+    later.mkdir()
+    project = _create_project(tmp_path, name="Folders")
+    updated = database.add_project_folder(project["slug"], str(later), "read")
+    assert updated is not None
+    modes = {item["path"]: item["accessMode"] for item in updated["folders"]}
+    assert modes[project["primaryPath"]] == "readwrite"
+    assert modes[str(later.resolve())] == "read"
+    with pytest.raises(ProjectNameError):
+        database.add_project_folder(project["slug"], str(tmp_path / "missing"), "read")
 
 
-def test_project_resource_access_enforces_enabled_bindings(isolated_db, tmp_path):
-    """运行时白名单同时执行 enabled 和 Workspace 归属校验。"""
+def test_directory_grant_intersects_agent_scope(isolated_db, tmp_path):
+    """运行时目录授权是 Project folders 与 Agent scope 的交集，不再查 binding。"""
 
-    create_workspace({"id": "ws-access", "name": "访问工作区"})
-    upsert_agent({"id": "agent-access", "name": "Agent", "workspaceId": "ws-access"})
-    project = _create_project(tmp_path, workspace_id="ws-access", project_id="project-access")
-    upsert_project_resource_binding({
-        "project_id": project["id"],
-        "resource_type": "agent",
-        "resource_id": "agent-access",
-        "enabled": False,
-    })
+    project = _create_project(tmp_path, name="Access")
+    upsert_agent({"id": "agent-access", "name": "Agent", "system_prompt": "prompt"})
     context = resolve_runtime_context(
-        project_id=project["id"],
+        project_slug=project["slug"],
         session_id="session-access",
         run_id="run-access",
         agent_id="agent-access",
     )
-    access = resolve_project_resource_access(context)
-
+    access = load_project_access(context)
     access.require_agent("agent-access")
-    assert access.filter_ids("http_tool", ["unknown-http-tool"]) == []
+    readable, writable = grant_roots(context, Path(project["primaryPath"]))
+    assert Path(project["primaryPath"]).resolve() in {path.resolve() for path in readable}
+    assert Path(project["primaryPath"]).resolve() in {path.resolve() for path in writable}
+    with pytest.raises(ValueError, match="Agent 配置不存在"):
+        access.require_agent("missing-agent")
+    outside = FolderGrant(path=str(tmp_path / "other"), access_mode="readwrite")
+    denied = context.__class__(
+        project_slug=context.project_slug,
+        project_root=context.project_root,
+        session_id="",
+        run_id=context.run_id,
+        agent_id=context.agent_id,
+        folders=(outside,),
+    )
+    with pytest.raises(Exception, match="不相交"):
+        grant_roots(denied, Path(project["primaryPath"]))
 
 
-def test_project_resource_api_rejects_cross_workspace_binding(isolated_db, tmp_path):
-    """管理 API 不允许把其他 Workspace 的资源绑定进当前 Project。"""
+def test_unknown_directory_grant_is_rejected(isolated_db, tmp_path):
+    """目录授权只接受已存在的绝对路径，不再提供跨 Workspace 绑定 API。"""
 
-    create_workspace({"id": "ws-a", "name": "A"})
-    create_workspace({"id": "ws-b", "name": "B"})
-    project = _create_project(tmp_path, workspace_id="ws-a", project_id="project-a")
-    upsert_agent({"id": "agent-b", "name": "Agent B", "workspaceId": "ws-b"})
-
-    with pytest.raises(HTTPException, match="不能绑定") as exc_info:
-        asyncio.run(put_project_resource(
-            project["id"],
-            "agent",
-            "agent-b",
-            ProjectResourceBindingRequest(enabled=True),
-        ))
-    assert exc_info.value.status_code == 422
-
-    with pytest.raises(HTTPException, match="不支持"):
-        asyncio.run(put_project_resource(
-            project["id"],
-            "unknown",
-            "agent-b",
-            ProjectResourceBindingRequest(enabled=True),
-        ))
+    project = _create_project(tmp_path, name="Grant")
+    with pytest.raises(ProjectNameError):
+        database.add_project_folder(project["slug"], "relative/path", "read")
+    with pytest.raises(ProjectNameError):
+        database.add_project_folder(project["slug"], str(tmp_path / "nope"), "write")
 
 
-def test_chat_run_context_applies_project_resource_allowlist(isolated_db, tmp_path, monkeypatch):
-    """Chat 组装层只把 Project 白名单与 Agent 配置的交集交给 Runtime。"""
+def test_chat_run_context_keeps_enabled_skills_without_binding(isolated_db, tmp_path, monkeypatch):
+    """Chat 组装不再按 Project binding 裁剪 Skill / MCP / HTTP。"""
 
-    create_workspace({"id": "ws-chat-resources", "name": "Chat 资源"})
+    project = _create_project(tmp_path, name="Chat Resources")
     upsert_agent({
         "id": "agent-chat",
         "name": "Chat Agent",
-        "workspaceId": "ws-chat-resources",
+        "system_prompt": "system",
+        "skills": ["skill-allowed", "skill-blocked"],
+        "mcpTools": ["mcp-tool-a"],
+        "knowledgeTools": ["http-allowed", "http-blocked"],
+        "guardrails": {"filesystem_scope": project["primaryPath"]},
     })
-    replace_skills({
-        skill_id: {
-            "id": skill_id,
-            "name": skill_id,
-            "description": "",
-            "category": "test",
-            "status": "installed",
-            "enabled": True,
-            "updatedAt": "2026-07-16T00:00:00+00:00",
-            "workspaceId": "ws-chat-resources",
-        }
-        for skill_id in ("skill-allowed", "skill-blocked")
-    })
-    replace_mcp_servers({
-        server_id: {
-            "id": server_id,
-            "name": server_id,
-            "description": "",
-            "category": "test",
-            "transport": "sse",
-            "status": "installed",
-            "enabled": True,
-            "updatedAt": "2026-07-16T00:00:00+00:00",
-            "workspaceId": "ws-chat-resources",
-        }
-        for server_id in ("mcp-allowed", "mcp-blocked")
-    })
-    for tool_id in ("http-allowed", "http-blocked"):
-        upsert_http_tool({
-            "id": tool_id,
-            "name": tool_id,
-            "url": f"https://example.com/{tool_id}",
-            "workspaceId": "ws-chat-resources",
-        })
-    project = _create_project(
-        tmp_path,
-        workspace_id="ws-chat-resources",
-        project_id="project-chat-resources",
-    )
-    for resource_type, resource_id in (
-        ("skill", "skill-blocked"),
-        ("mcp", "mcp-blocked"),
-        ("http_tool", "http-blocked"),
-    ):
-        upsert_project_resource_binding({
-            "project_id": project["id"],
-            "resource_type": resource_type,
-            "resource_id": resource_id,
-            "enabled": False,
-        })
-
     captured: dict[str, object] = {}
-    agent_config = SimpleNamespace(
-        name="Chat Agent",
-        system_prompt="system",
-        skills=["skill-allowed", "skill-blocked"],
-        mcp_tools=["mcp-tool-a"],
-        knowledge_tools=["http-allowed", "http-blocked"],
-        model_config_data=None,
-        guardrails=SimpleNamespace(filesystem_scope=str(tmp_path)),
-    )
+
+    def installed(skill_id):
+        if skill_id in {"skill-allowed", "skill-blocked"}:
+            return SimpleNamespace(id=skill_id, enabled=True, available_to_all_agents=False)
+        return None
 
     async def fake_readiness(**kwargs):
         captured["readiness_skill_ids"] = kwargs["skill_ids"]
@@ -729,11 +600,11 @@ def test_chat_run_context_applies_project_resource_allowlist(isolated_db, tmp_pa
             trace_payload={},
         )
 
-    monkeypatch.setattr("src.server.routes.chat.run_context.get_registered_agent", lambda agent_id: agent_config)
-    monkeypatch.setattr("src.server.routes.chat.run_context.get_effective_model_settings", lambda: SimpleNamespace(
-        default_model="model",
-        fallback_models=[],
-    ))
+    monkeypatch.setattr("src.server.routes.chat.run_context.get_installed_skill", installed)
+    monkeypatch.setattr(
+        "src.server.routes.chat.run_context.get_effective_model_settings",
+        lambda: SimpleNamespace(default_model="model", fallback_models=[]),
+    )
     monkeypatch.setattr("src.server.routes.chat.run_context.check_message_readiness_with_model", fake_readiness)
     monkeypatch.setattr("src.server.routes.chat.run_context.route_chat_message_with_model", fake_route)
     monkeypatch.setattr("src.server.routes.chat.run_context.get_active_session_skill_run", lambda *args: None)
@@ -741,19 +612,24 @@ def test_chat_run_context_applies_project_resource_allowlist(isolated_db, tmp_pa
     monkeypatch.setattr("src.runtime.governance.build_professional_prompt", lambda *args, **kwargs: "")
     monkeypatch.setattr(
         "src.server.routes.chat.run_context.build_runtime_skills",
-        lambda *, skill_ids, **kwargs: captured.update(skill_ids=skill_ids) or [],
-    )
-    monkeypatch.setattr(
-        "src.server.routes.chat.run_context._build_runtime_mcp_servers",
-        lambda agent, *, allowed_server_ids: captured.update(mcp_ids=allowed_server_ids) or [],
-    )
-    monkeypatch.setattr(
-        "src.server.routes.chat.run_context._build_runtime_knowledge_tools",
-        lambda agent, *, allowed_tool_ids: captured.update(http_ids=allowed_tool_ids) or [],
+        lambda *, skill_ids, **kwargs: captured.update(skill_ids=list(skill_ids)) or [],
     )
 
+    def spy_mcp(agent, **kwargs):
+        captured["mcp_allowlist"] = kwargs.get("allowed_server_ids")
+        captured["mcp_tools"] = list(getattr(agent, "mcp_tools", []) or [])
+        return []
+
+    def spy_http(agent, **kwargs):
+        captured["http_allowlist"] = kwargs.get("allowed_tool_ids")
+        captured["http_tools"] = list(getattr(agent, "knowledge_tools", []) or [])
+        return []
+
+    monkeypatch.setattr("src.server.routes.chat.run_context._build_runtime_mcp_servers", spy_mcp)
+    monkeypatch.setattr("src.server.routes.chat.run_context._build_runtime_knowledge_tools", spy_http)
+
     runtime_context = resolve_runtime_context(
-        project_id=project["id"],
+        project_slug=project["slug"],
         session_id="session-chat-resources",
         run_id="run-chat-resources",
         agent_id="agent-chat",
@@ -761,18 +637,19 @@ def test_chat_run_context_applies_project_resource_allowlist(isolated_db, tmp_pa
     ctx = asyncio.run(build_chat_run_context(
         ChatMessage(
             session_id="session-chat-resources",
-            project_id=project["id"],
+            project_slug=project["slug"],
             message="执行任务",
             agent_id="agent-chat",
         ),
         runtime_context,
     ))
 
-    assert captured["readiness_skill_ids"] == ["skill-allowed"]
-    assert captured["skill_ids"] == ["skill-allowed"]
-    assert captured["mcp_ids"] == frozenset({"mcp-allowed"})
-    assert captured["http_ids"] == frozenset({"http-allowed"})
-    assert ctx.project_resources and ctx.project_resources.project_id == project["id"]
+    assert captured["readiness_skill_ids"] == ["skill-allowed", "skill-blocked"]
+    assert captured["skill_ids"] == ["skill-allowed", "skill-blocked"]
+    assert captured["mcp_allowlist"] is None
+    assert captured["http_allowlist"] is None
+    assert ctx.project_resources is not None
+    assert ctx.project_resources.project_slug == project["slug"]
 
 
 class _NoopVectorBackend:

@@ -14,8 +14,8 @@ from src.tenancy.context import TenantContext, use_tenant
 
 def action_for(tenant="local", **updates):
     if database.get_chat_run("r") is None:
-        database.upsert_chat_run({"id": "r", "workspaceId": "w", "projectId": "p", "sessionId": "s"})
-    owner = RunAuthorization(tenantId=tenant, workspaceId="w", projectId="p", sessionId="s",
+        database.upsert_chat_run({"id": "r", "projectSlug": "p", "sessionId": "s"})
+    owner = RunAuthorization(tenantId=tenant, projectSlug="p", sessionId="s",
                              runId="r", actorId="a", capabilityVersion="1", **updates)
     return ActionSnapshot(authorization=owner, callId="c", toolName="Fake", toolVersion="1",
                           normalizedInputJson='{"value":1}')
@@ -180,7 +180,7 @@ def test_repeated_approval_and_concurrent_resume_get_one_permit(local_tenant):
         store.reserve(action, decision.id)
 
 
-@pytest.mark.parametrize("field,value", [("workspaceId", "other"), ("projectId", "other"),
+@pytest.mark.parametrize("field,value", [("projectSlug", "other"),
     ("sessionId", "other"), ("runId", "other"), ("actorId", "other"), ("capabilityVersion", "2")])
 def test_foreign_owner_commands_rejected(field, value):
     store, action = PermissionRecordStore(), action_for()
@@ -313,7 +313,7 @@ def test_run_metadata_is_strict_and_frozen_while_session_selection_can_change():
     for changes in ({"approvalMode": "full_access"}, {"tenantId": "other"}, {"unexpected": True}):
         with pytest.raises(ValueError):
             database.upsert_chat_run({"id": "frozen", "authorization": {**metadata, **changes}})
-    for key in ("sessionId", "workspaceId", "projectId", "agentId"):
+    for key in ("sessionId", "projectSlug", "agentId"):
         with pytest.raises(ValueError):
             database.upsert_chat_run({"id": "frozen", key: "different"})
     assert database.get_chat_run("frozen")["authorization"] == run["authorization"]
@@ -371,7 +371,7 @@ def test_startup_reconcile_invalidates_pending_approval_and_execution():
     from src.server.routes.chat.background_runs import reconcile_interrupted_chat_runs
 
     store, action = PermissionRecordStore(), action_for()
-    database.upsert_chat_run({"id": "r", "workspaceId": "w", "projectId": "p", "sessionId": "s",
+    database.upsert_chat_run({"id": "r", "projectSlug": "p", "sessionId": "s",
                               "status": "waiting_permission",
                               "authorization": {"schemaVersion": 1, "tenantId": "local",
                                                 "approvalMode": "manual", "reviewerConfigVersion": ""}})
@@ -433,8 +433,8 @@ def test_cancel_invalidates_run_before_clearing_pending_interaction():
     run = ChatBackgroundRun(
         id="r",
         session_id="s",
-        workspace_id="w",
-        project_id="p",
+        
+        project_slug="p",
         persisted=True,
         status="cancelled",
     )

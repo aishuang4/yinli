@@ -44,8 +44,7 @@ class FeasibilityResult(BaseModel):
 
     verdict: Literal["ok", "partial", "impossible"]
     agent_id: str = Field(alias="agentId")
-    workspace_id: str = Field(alias="workspaceId")
-    project_id: str = Field(alias="projectId")
+    project_slug: str = Field(alias="projectSlug")
     task_intent: str = Field(alias="taskIntent")
     required_intents: list[str] = Field(alias="requiredIntents")
     claimed: list[JobCapabilityClaim]
@@ -71,8 +70,7 @@ def evaluate_job_feasibility(
     *,
     task_intent: str,
     agent_id: str,
-    workspace_id: str,
-    project_id: str,
+    project_slug: str,
     required_intents: tuple[str, ...] | list[str] = (),
     claimed_must_include: frozenset[str] | None = None,
     include_suggestions: bool = True,
@@ -85,7 +83,7 @@ def evaluate_job_feasibility(
 
     intent_text = str(task_intent or "")
     required = extract_required_intents(intent_text, required_intents)
-    inventory = build_agent_capability_inventory(agent_id, project_id, workspace_id)
+    inventory = build_agent_capability_inventory(agent_id)
     from src.server.routes.agents import get_registered_agent
 
     agent = get_registered_agent(agent_id) if agent_id else None
@@ -98,8 +96,7 @@ def evaluate_job_feasibility(
         return FeasibilityResult(
             verdict="impossible",
             agent_id=agent_id,
-            workspace_id=workspace_id,
-            project_id=project_id,
+            project_slug=project_slug,
             task_intent=intent_text,
             required_intents=required,
             claimed=[],
@@ -121,8 +118,7 @@ def evaluate_job_feasibility(
             message="定时任务必须由 Job Agent 执行。对话助手不能到点无人值守运行。",
             suggested_agent_ids=_suggest_agents(
                 current_agent_id=agent_id,
-                workspace_id=workspace_id,
-                project_id=project_id,
+                project_slug=project_slug,
                 required=required,
             ) if include_suggestions else [],
         )
@@ -135,8 +131,7 @@ def evaluate_job_feasibility(
         return FeasibilityResult(
             verdict="impossible",
             agent_id=agent_id,
-            workspace_id=workspace_id,
-            project_id=project_id,
+            project_slug=project_slug,
             task_intent=intent_text,
             required_intents=required,
             claimed=required_claims,
@@ -249,16 +244,14 @@ def evaluate_job_feasibility(
     if verdict != "ok" and include_suggestions:
         suggested = _suggest_agents(
             current_agent_id=agent_id,
-            workspace_id=workspace_id,
-            project_id=project_id,
+            project_slug=project_slug,
             required=required,
         )
 
     return FeasibilityResult(
         verdict=verdict,
         agent_id=agent_id,
-        workspace_id=workspace_id,
-        project_id=project_id,
+        project_slug=project_slug,
         task_intent=intent_text,
         required_intents=required,
         claimed=claimed,
@@ -340,8 +333,7 @@ def _message(
 def _suggest_agents(
     *,
     current_agent_id: str,
-    workspace_id: str,
-    project_id: str,
+    project_slug: str,
     required: list[str],
 ) -> list[str]:
     try:
@@ -363,8 +355,7 @@ def _suggest_agents(
             other = evaluate_job_feasibility(
                 task_intent=" ".join(required),
                 agent_id=agent_id,
-                workspace_id=workspace_id,
-                project_id=project_id,
+                project_slug=project_slug,
                 required_intents=tuple(required),
                 include_suggestions=False,
             )

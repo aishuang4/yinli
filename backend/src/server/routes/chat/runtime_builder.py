@@ -16,9 +16,8 @@ from src.runtime.agent_spec import (
     create_main_agent_from_spec,
 )
 from src.server.routes.chat.models import ChatMessage
-from src.server.routes.chat.skill_selector import select_runtime_skills
 from src.server.routes.chat.tool_scope_resolver import resolve_runtime_tool_scope
-from src.server.routes.skills import Skill
+from src.server.routes.skills import Skill, get_installed_skill
 
 __all__ = [
     "MainAgentRuntimeSpec",
@@ -61,12 +60,20 @@ def build_runtime_skills(
 ) -> list[Skill]:
     """选择本轮 Skill；正在恢复的 Skill 优先。"""
 
-    return select_runtime_skills(
-        skill_ids=skill_ids,
-        message=message,
-        active_skill=active_skill,
-        external_skills=external_skills,
-    )
+    del message
+    external_by_ref = {
+        ref: skill
+        for skill in (external_skills or [])
+        for ref in (skill.id, skill.name)
+    }
+    available = [
+        skill
+        for skill_id in skill_ids
+        if (skill := get_installed_skill(skill_id) or external_by_ref.get(skill_id)) is not None
+    ]
+    if active_skill and all(skill.id != active_skill.id for skill in available):
+        available.insert(0, active_skill)
+    return available
 
 
 def resolve_react_runtime_tool_scope(
