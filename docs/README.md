@@ -60,6 +60,7 @@
 | 文档 | 用途 |
 | --- | --- |
 | `docs/beta-release-checklist.md` | `0.1.0-beta.*` 桌面内测发布前检查。 |
+| `docs/context-storage-release-note.md` | 存储重构发布说明：旧对话不保留、封存位置、开发机清库命令。 |
 | `docs/windows-data-uninstall-test-case.md` | Windows 数据目录与卸载的可执行用例。 |
 
 ## 维护规则

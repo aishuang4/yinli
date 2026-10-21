@@ -1,7 +1,7 @@
 # 引力 YINLI · 上下文归属与存储重构 — 设计方案与实施方案
 
 版本：v1.6（2026-10-20），2026-10-21 起作为已落地的存储合同。
-阶段 1–4 已在 `refactor/context-storage` 提交。阶段 5 删掉旧 JSON 导入、`migrate_agents` 和启动时的目录搬迁，并用 `backend/test/test_context_storage_ratchet.py` 挡住这些路径回流。`health` 没有锁等待或库体积指标，本阶段不拆 `jobs.db` / `audit.db`。
+阶段 1–4 已在 `refactor/context-storage` 提交。阶段 5 删掉旧 JSON 导入、`migrate_agents` 和启动时的目录搬迁，并用 `backend/test/test_context_storage_ratchet.py` 挡住这些路径回流。`health` 没有锁等待或库体积指标，本阶段不拆 `jobs.db` / `audit.db`。封存提示、`yinli db reset --dev` 和发布说明已落地，见 `docs/context-storage-release-note.md`。
 `openspec/changes/archive/2026-10-21-simplify-global-session-context` 与 `2026-10-21-unify-file-based-skill-loading` 不再作为实现依据。
 相关前置调研：《定时任务技能调度调研报告》《开源 Agent 项目与会话存储设计对照调研》《Hermes 存储设计调研与融合方案》
 

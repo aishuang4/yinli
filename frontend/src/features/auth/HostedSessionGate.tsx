@@ -5,6 +5,7 @@ import { AuthScreen, type AuthFormMode } from './AuthScreen';
 import { fetchAuthConfig, fetchCurrentUser, submitAuth } from './authClient';
 import { EMPTY_CLOUD_ACCOUNT, workbenchGate, type AuthUser } from './authRules';
 import { useAuthStore } from './authStore';
+import { LegacyArchiveNotice } from '../storage/LegacyArchiveNotice';
 
 export function HostedSessionGate({ children }: { children: ReactNode }) {
   const serveMode = useAuthStore((state) => state.serveMode);
@@ -124,5 +125,10 @@ export function HostedSessionGate({ children }: { children: ReactNode }) {
       />
     );
   }
-  return children;
+  return (
+    <>
+      <LegacyArchiveNotice />
+      {children}
+    </>
+  );
 }

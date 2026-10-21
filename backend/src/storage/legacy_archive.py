@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +33,7 @@ def archive_legacy_layout(data_dir: Path) -> Path | None:
         _checkpoint_and_move(state_db, dest)
     if workspaces.exists():
         workspaces.rename(dest / "workspaces")
+    _write_pending_notice(dest)
     return dest
 
 
@@ -39,6 +41,65 @@ def forget_archive_checks() -> None:
     """测试 teardown 用。"""
 
     _checked.clear()
+
+
+def pending_legacy_notice(data_dir: Path) -> dict[str, object]:
+    """前端只展示这里的结果。没有未确认封存时 pending 为 false。"""
+
+    payload = _read_notice(data_dir)
+    if payload is None or payload.get("acknowledged") is True:
+        return {"pending": False}
+    path = str(payload.get("path") or "")
+    if not path:
+        return {"pending": False}
+    return {
+        "pending": True,
+        "path": path,
+        "title": "历史对话已封存",
+        "message": (
+            "本版本不保留旧对话。旧数据库和旧工作区目录已封存到下面的位置，"
+            "可用任意 SQLite 客户端打开其中的数据库文件。封存目录不会自动删除。"
+        ),
+    }
+
+
+def acknowledge_legacy_notice(data_dir: Path) -> dict[str, object]:
+    """用户确认后不再弹出。封存目录本身保留。"""
+
+    notice = _notice_path(data_dir)
+    payload = _read_notice(data_dir)
+    if payload is None:
+        return {"pending": False}
+    payload["acknowledged"] = True
+    notice.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return {"pending": False}
+
+
+def _notice_path(data_dir: Path) -> Path:
+    return data_dir.parent / "backups" / "legacy-notice.json"
+
+
+def _write_pending_notice(dest: Path) -> None:
+    notice = dest.parent / "legacy-notice.json"
+    payload = {
+        "path": str(dest),
+        "archivedAt": datetime.now(timezone.utc).isoformat(),
+        "acknowledged": False,
+    }
+    notice.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def _read_notice(data_dir: Path) -> dict[str, object] | None:
+    notice = _notice_path(data_dir)
+    if not notice.is_file():
+        return None
+    try:
+        payload = json.loads(notice.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
 
 
 def _has_workspaces_table(path: Path) -> bool:

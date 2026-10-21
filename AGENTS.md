@@ -80,7 +80,7 @@ npm test         # vitest 单测
 - **向量存储**：全局 `VectorStoreBackend` 抽象支持 `disabled` 和 `zvec` provider。`VECTOR_STORE_PROVIDER` 只在首次初始化时生效，之后读取持久化 `VectorStorePolicy`；向量库只索引历史记忆底层表 `memory_nodes`，Markdown 记忆不进入向量库。
 - **`json_store` 表**：`(namespace, key) -> JSON`，用于系统设置等 Pydantic 文档。模型配置已迁移到 `USER_DATA_ROOT/models.json`；旧 `system_settings/model` 仅在首次迁移时读取。
 
-新库从 `schema_version = 1` 起步。加列走 `reconcile_columns()`。不要恢复 `_ensure_column`、`migrate_json_*_file`、`migrate_agents`、`assign_owners` 或 `schema_migrations`。检测到旧库或旧 `workspaces/` 时，整份封存到 `backups/legacy-<ts>/`，代码不读取。
+新库从 `schema_version = 1` 起步。加列走 `reconcile_columns()`。不要恢复 `_ensure_column`、`migrate_json_*_file`、`migrate_agents`、`assign_owners` 或 `schema_migrations`。检测到旧库或旧 `workspaces/` 时，整份封存到 `backups/legacy-<ts>/`，代码不读取。封存成功后写 `backups/legacy-notice.json`，前端只按 `GET /api/db/legacy-notice` 弹一次。桌面端可用 `yinli db reset --dev` 删除当前 `state.db`，不删除 `backups`。托管模式拒绝该命令。发布说明见 `docs/context-storage-release-note.md`。
 
 ### 配置分层
 

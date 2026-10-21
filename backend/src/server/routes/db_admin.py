@@ -5,6 +5,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.config.settings import settings
 from src.server.auth.routes import require_admin
+from src.config.runtime_paths import data_root
+from src.storage.legacy_archive import acknowledge_legacy_notice, pending_legacy_notice
 from src.storage.maintenance import backup, health, recover
 from src.storage.sqlite_tx import StorageLocked
 
@@ -21,6 +23,20 @@ class RecoverBody(BaseModel):
 def _guard(request: Request) -> None:
     if settings.serve_mode == "hosted":
         require_admin(request)
+
+
+@router.get("/legacy-notice")
+def read_legacy_notice() -> dict:
+    """封存完成后由后端给出提示。没有未确认封存时 pending 为 false。"""
+
+    return pending_legacy_notice(data_root())
+
+
+@router.post("/legacy-notice/ack")
+def ack_legacy_notice() -> dict:
+    """用户确认后不再弹出。"""
+
+    return acknowledge_legacy_notice(data_root())
 
 
 @router.get("/health")

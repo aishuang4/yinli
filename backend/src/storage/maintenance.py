@@ -107,6 +107,35 @@ def recover(source: Path, dest: Path | None = None) -> Path:
     return target
 
 
+class DevResetRefused(RuntimeError):
+    """托管模式不能清空当前库。"""
+
+
+def reset_dev_database() -> list[Path]:
+    """删除当前桌面端的 state.db 及尚未封存的旧库文件。不删除 backups。"""
+
+    from src.storage import database
+    from src.storage.legacy_archive import forget_archive_checks
+    from src.tenancy.context import is_hosted_mode
+
+    if is_hosted_mode():
+        raise DevResetRefused("托管模式不能清空数据库")
+    path = database.db_path()
+    removed: list[Path] = []
+    for candidate in _database_files(path):
+        if candidate.is_file():
+            candidate.unlink()
+            removed.append(candidate)
+    old = path.parent / "agent_workstation.db"
+    for candidate in _database_files(old):
+        if candidate.is_file():
+            candidate.unlink()
+            removed.append(candidate)
+    database.forget_db(path)
+    forget_archive_checks()
+    return removed
+
+
 def health() -> dict[str, object]:
     """报告 WAL 大小、最近一次 checkpoint 和当前写锁。"""
 
@@ -156,6 +185,10 @@ def _probe_lock(path: Path) -> str:
         return "busy"
     finally:
         conn.close()
+
+
+def _database_files(path: Path) -> tuple[Path, Path, Path]:
+    return path, Path(f"{path}-wal"), Path(f"{path}-shm")
 
 
 def _new_backup_path(prefix: str) -> Path:

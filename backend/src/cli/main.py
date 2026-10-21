@@ -8,7 +8,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from src.storage.maintenance import backup, health, recover
+from src.storage.maintenance import DevResetRefused, backup, health, recover, reset_dev_database
 from src.tenancy.context import TenantContext, use_tenant
 
 
@@ -92,6 +92,9 @@ def main(argv: list[str] | None = None) -> int:
 
     action.add_parser("health")
 
+    reset_cmd = action.add_parser("reset", help="清空当前桌面端数据库，不删除 backups")
+    reset_cmd.add_argument("--dev", action="store_true", required=True, help="确认这是开发机清空")
+
     agents = sub.add_parser("agents")
     agents_action = agents.add_subparsers(dest="action", required=True)
     legacy = agents_action.add_parser("import-legacy")
@@ -107,6 +110,18 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.group == "db" and args.action == "health":
             print(json.dumps(health(), ensure_ascii=False))
+            return 0
+        if args.group == "db" and args.action == "reset":
+            try:
+                removed = reset_dev_database()
+            except DevResetRefused as exc:
+                print(str(exc), file=sys.stderr)
+                return 2
+            if not removed:
+                print("没有需要删除的数据库文件")
+            else:
+                for path in removed:
+                    print(f"已删除: {path}")
             return 0
         if args.group == "agents" and args.action == "import-legacy":
             return _import_legacy_agents(args.directory)
