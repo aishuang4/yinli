@@ -41,6 +41,7 @@
 | `docs/scheduled-jobs-v2-agent-activation.md` | Job Agent 能力合同、创建前门禁、到期装配 toolkit。 |
 | `docs/permission-system-v2.md` | 三种审批模式、风险分类、SmartGuard 与复核卡。数据表见 `docs/permission-system-v2-data-contract.md`。 |
 | `docs/group-studio-v2.md` | 群聊 V2：房间留下，主持流程拆掉。事件见群聊契约。 |
+| `docs/context-storage-refactor.md` | 租户库、Project slug、目录授权、Job Skill 冻结。存储归属以这份已落地合同为准。 |
 
 ## 未落地设计
 

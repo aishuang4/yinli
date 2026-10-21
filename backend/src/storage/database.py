@@ -352,7 +352,8 @@ def ensure_db() -> None:
             conn.execute("DROP TABLE IF EXISTS project_resource_bindings")
             conn.execute("DROP TABLE IF EXISTS project_job_recipients")
             conn.execute("DELETE FROM json_store WHERE namespace = 'team_templates'")
-            _reset_legacy_chat_stream_data(conn)
+            conn.execute("DROP TABLE IF EXISTS chat_run_events")
+            conn.execute("DROP TABLE IF EXISTS chat_run_states")
             reconcile_columns(conn)
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_chat_messages_session_order "
@@ -427,7 +428,6 @@ def ensure_db() -> None:
                 violations = conn.execute("PRAGMA foreign_key_check").fetchall()
                 if violations:
                     logger.warning("本地库外键检查发现 %s 行不一致", len(violations))
-    import_legacy_chat_store_once()
 
 
 def _json_default(value: Any) -> Any:
@@ -449,42 +449,6 @@ def _loads(value: str | None, default: Any) -> Any:
         return json.loads(value)
     except Exception:
         return default
-
-
-def _reset_legacy_chat_stream_data(conn: sqlite3.Connection) -> None:
-    """检测到旧 RunState/V3 Snapshot 时一次性清空 Chat 运行域，不做数据迁移。"""
-
-    table_names = {
-        str(row["name"])
-        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
-    }
-    has_legacy_tables = bool({"chat_run_events", "chat_run_states"} & table_names)
-    has_legacy_snapshot = False
-    for row in conn.execute("SELECT display_snapshot FROM chat_messages").fetchall():
-        snapshot = _loads(row["display_snapshot"], {})
-        if not isinstance(snapshot, dict) or snapshot.get("version") != 4:
-            has_legacy_snapshot = True
-            break
-    if has_legacy_tables or has_legacy_snapshot:
-        for table in (
-            "projection_frames",
-            "projection_streams",
-            "chat_domain_events",
-            "chat_domain_streams",
-            "subagent_transcript_items",
-            "subagent_invocations",
-            "plan_events",
-            "plan_steps",
-            "plans",
-            "run_events",
-            "chat_messages",
-            "chat_runs",
-            "chat_sessions",
-        ):
-            if table in table_names:
-                conn.execute(f"DELETE FROM {table}")
-    conn.execute("DROP TABLE IF EXISTS chat_run_events")
-    conn.execute("DROP TABLE IF EXISTS chat_run_states")
 
 
 def _project_record_store() -> ProjectRecordStore:
@@ -606,24 +570,6 @@ def namespace_has_records(namespace: str) -> bool:
     return _json_document_store().has_records(namespace)
 
 
-def migrate_json_list_file(
-    namespace: str,
-    path: str | Path,
-    key_field: str = "id",
-) -> None:
-    """Import an existing JSON list file into SQLite if namespace is empty."""
-    _json_document_store().migrate_list_file(namespace, path, key_field)
-
-
-def migrate_json_object_file(
-    namespace: str,
-    key: str,
-    path: str | Path,
-) -> None:
-    """Import an existing JSON object file into SQLite if the record is empty."""
-    _json_document_store().migrate_object_file(namespace, key, path)
-
-
 def _resource_catalog_record_store() -> ResourceCatalogRecordStore:
     """创建复用当前数据库基础设施的持久资源目录存储。"""
 
@@ -646,20 +592,7 @@ def list_agents() -> list[dict[str, Any]]:
 
 
 def upsert_agent(data: dict[str, Any]) -> None:
-    """迁移完成后禁止再把用户正文写入 sqlite `agents` 表。"""
-
-    migrated = False
-    try:
-        from src.catalog.migrate_agents import is_agent_catalog_migrated
-
-        migrated = is_agent_catalog_migrated()
-    except Exception:
-        migrated = False
-    if migrated:
-        # 规格：marker=done 后 sqlite 不是 Agent 正文权威。测试夹具仍可走 catalog 文件。
-        pass
-    else:
-        _resource_catalog_record_store().upsert_agent(data)
+    """用户 Agent 正文只写 profile 文件，不写入 sqlite `agents` 表。"""
     from src.catalog.agent_models import AgentResponse
     from src.catalog.system_defaults import utc_now
     from src.server.routes import agents as agents_routes
@@ -896,30 +829,6 @@ def _chat_session_record_store() -> ChatSessionRecordStore:
         empty_display_snapshot=EMPTY_DISPLAY_SNAPSHOT,
         default_project_slug=DEFAULT_PROJECT_ID,
     )
-
-
-def import_legacy_chat_store_once() -> None:
-    """把旧 chat_sessions.json 或 json_store 遗留记录导入一次。库里已有会话则只打标记。"""
-
-    from src.config.runtime_paths import data_root
-
-    migrate_json_object_file("chat_store", "default", data_root() / "chat_sessions.json")
-    if get_json_record("schema_migrations", "chat_store_incremental_v1"):
-        return
-    with _lock, _connect() as conn:
-        existing = int(conn.execute("SELECT COUNT(*) AS n FROM chat_sessions").fetchone()["n"])
-    if existing == 0:
-        legacy = get_json_record("chat_store", "default") or {}
-        for item in legacy.get("sessions") or []:
-            if isinstance(item, dict) and item.get("id"):
-                insert_chat_session_if_absent(item)
-        messages = legacy.get("messages") or {}
-        if isinstance(messages, dict):
-            for session_id, items in messages.items():
-                for item in items or []:
-                    if isinstance(item, dict) and item.get("id"):
-                        append_chat_message(str(session_id), item)
-    upsert_json_record("schema_migrations", "chat_store_incremental_v1", {"done": True})
 
 
 def get_chat_session(session_id: str) -> dict[str, Any] | None:
@@ -1367,12 +1276,6 @@ def find_blank_group_studio_draft_id(project_id: str) -> str | None:
 
 def list_group_studios_with_current_run() -> list[dict[str, Any]]:
     return _group_studio_record_store().list_with_current_run()
-
-
-def migrate_group_studio_v2() -> int:
-    """启动时把旧群聊阶段机收成 V2。"""
-
-    return _group_studio_record_store().migrate_legacy_v2()
 
 
 def set_group_studio_member_status(

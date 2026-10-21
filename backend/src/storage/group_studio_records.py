@@ -423,42 +423,6 @@ class GroupStudioRecordStore:
                 )
         return self.get_member(group_id, member_id)
 
-    def migrate_legacy_v2(self) -> int:
-        """一次性把旧阶段机收成 open/paused/done，并移出 Host 席位。"""
-
-        self.ensure_db()
-        changed = 0
-        with self.lock, self.connect() as conn:
-            rows = conn.execute("SELECT id, status FROM group_studios").fetchall()
-            now = self.utc_now()
-            for row in rows:
-                nxt = normalize_studio_status(str(row["status"]))
-                if nxt != str(row["status"]):
-                    pause = "circuit" if str(row["status"]) == "circuit_broken" else None
-                    if nxt == "paused" and str(row["status"]) == "paused":
-                        pause = "user"
-                    conn.execute(
-                        """
-                        UPDATE group_studios
-                        SET status = ?, phase_before_pause = COALESCE(?, phase_before_pause),
-                            awaiting_intake_confirm = 0, awaiting_restatement = 0,
-                            claim_round_json = '[]', updated_at = ?
-                        WHERE id = ?
-                        """,
-                        (nxt, pause, now, row["id"]),
-                    )
-                    changed += 1
-                host_rows = conn.execute(
-                    """
-                    UPDATE group_memberships
-                    SET status = 'removed', updated_at = ?
-                    WHERE group_id = ? AND role = 'host' AND status != 'removed'
-                    """,
-                    (now, row["id"]),
-                )
-                changed += int(host_rows.rowcount or 0)
-        return changed
-
     def set_member_muted(self, group_id: str, member_id: str, muted: bool) -> dict[str, Any] | None:
         self.ensure_db()
         now = self.utc_now()

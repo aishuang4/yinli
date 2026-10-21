@@ -71,8 +71,6 @@ def _discover_packages(*args, **kwargs):
     return discover_skill_packages(*args, **kwargs)
 
 
-SKILLS_NAMESPACE = "skills"
-EXTERNAL_SKILL_OVERRIDES_NAMESPACE = "external_skill_overrides"
 # {skill_id: {"enabled"?: bool, "availableToAllAgents"?: bool}}
 _external_skill_overrides: dict[str, dict[str, bool]] = {}
 

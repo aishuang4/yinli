@@ -25,14 +25,8 @@ from src.catalog.mcp_files import McpFileRecord, discover_mcp_files, write_mcp_f
 from src.catalog.migrate_mcp_http import ensure_mcp_file_catalog, is_mcp_catalog_migrated
 from src.catalog.paths import mcp_dir
 from src.catalog.secrets import delete_named_secret, resolve_headers
-from src.config.runtime_paths import data_root
 from src.scheduler.mcp_runtime import resolve_mcp_runtime_servers as _resolve_mcp_runtime_servers
-from src.storage.database import (
-    list_json_records,
-    list_mcp_servers as db_list_mcp_servers,
-    migrate_json_list_file,
-    replace_mcp_servers,
-)
+from src.storage.database import list_mcp_servers as db_list_mcp_servers, replace_mcp_servers
 
 McpTransport = Literal["stdio", "sse", "websocket"]
 McpInstallStatus = Literal["available", "installed", "error"]
@@ -88,7 +82,6 @@ class McpRegisterRequest(BaseModel):
     model_config = {"populate_by_name": True, "extra": "ignore"}
 
 
-MCP_NAMESPACE = "mcp_servers"
 RESERVED_MCP_HEADERS = {"content-type", "accept"}
 
 
@@ -479,12 +472,7 @@ def _refresh_mcp_files() -> None:
 
 
 def _load_user_mcp_servers() -> None:
-    migrate_json_list_file(MCP_NAMESPACE, str(data_root() / "mcp_servers.json"))
     records = db_list_mcp_servers()
-    if not records:
-        legacy = list_json_records(MCP_NAMESPACE)
-        replace_mcp_servers({str(item["id"]): item for item in legacy if item.get("id")})
-        records = db_list_mcp_servers()
     for item in records:
         server = McpServer.model_validate(item)
         _mcp_servers[server.id] = server

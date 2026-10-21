@@ -258,11 +258,11 @@ def _sync_agents_from_catalog() -> None:
 
 
 def _load_agents() -> None:
-    from src.catalog.migrate_agents import ensure_agent_file_catalog
+    from src.catalog.loader import invalidate_catalog
     from src.catalog.skill_seed import seed_yinli_catalog_skill
 
     seed_yinli_catalog_skill()
-    ensure_agent_file_catalog()
+    invalidate_catalog()
     _sync_agents_from_catalog()
     _ensure_system_agents()
     _sync_agents_from_catalog()

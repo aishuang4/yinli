@@ -10,7 +10,6 @@ from src.storage.database import (
     get_active_group_studio_by_chat_session,
     get_group_studio_snapshot,
     list_group_studios_with_current_run,
-    migrate_group_studio_v2,
     update_group_studio_state,
 )
 
@@ -36,9 +35,8 @@ def archive_for_chat_session_delete(session_id: str) -> None:
 
 
 def reconcile_interrupted_studios() -> int:
-    """进程启动：迁移旧状态，未收口 Run 按 pause 收口。"""
+    """进程启动：未收口 Run 按 pause 收口。"""
 
-    migrate_group_studio_v2()
     rows = list_group_studios_with_current_run()
     for row in rows:
         group_id = str(row["id"])

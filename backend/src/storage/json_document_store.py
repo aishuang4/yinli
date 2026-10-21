@@ -1,16 +1,15 @@
-"""轻量 JSON Namespace 文档的 SQLite 兼容存储。"""
+"""轻量 JSON Namespace 文档的 SQLite 存储。"""
 
 from __future__ import annotations
 
 import json
 import sqlite3
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 
 class JsonDocumentStore:
-    """封装 json_store 的 CRUD 与历史 JSON 文件导入。"""
+    """封装 json_store 的 CRUD。"""
 
     def __init__(
         self,
@@ -94,32 +93,3 @@ class JsonDocumentStore:
                 (namespace,),
             ).fetchone()
         return row is not None
-
-    def migrate_list_file(self, namespace: str, path: str | Path, key_field: str = "id") -> None:
-        file_path = Path(path)
-        if self.has_records(namespace) or not file_path.exists():
-            return
-        try:
-            data = json.loads(file_path.read_text(encoding="utf-8"))
-        except Exception:
-            return
-        if not isinstance(data, list):
-            return
-        records = {
-            str(item[key_field]): item
-            for item in data
-            if isinstance(item, dict) and item.get(key_field)
-        }
-        if records:
-            self.replace_namespace(namespace, records)
-
-    def migrate_object_file(self, namespace: str, key: str, path: str | Path) -> None:
-        file_path = Path(path)
-        if self.get(namespace, key) is not None or not file_path.exists():
-            return
-        try:
-            data = json.loads(file_path.read_text(encoding="utf-8"))
-        except Exception:
-            return
-        if isinstance(data, dict):
-            self.upsert(namespace, key, data)

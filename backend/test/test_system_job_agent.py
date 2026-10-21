@@ -62,9 +62,6 @@ def test_load_agents_backfills_system_job_agent_in_existing_database(
     """迁移后用户 Agent 进 profile 文件，系统 Agent 由代码提供，sqlite 表清空。"""
 
     monkeypatch.setattr("src.config.runtime_paths.USER_DATA_ROOT", tmp_path)
-    from src.storage.database import upsert_json_record
-
-    upsert_json_record("catalog", "agent_migration_v1", {"status": "pending"})
     database.upsert_agent({
         "id": "existing-agent",
         "name": "Existing",
@@ -76,7 +73,6 @@ def test_load_agents_backfills_system_job_agent_in_existing_database(
         "tags": [],
         "role": "chat",
     })
-    upsert_json_record("catalog", "agent_migration_v1", {"status": ""})
     agents_routes._load_agents()
 
     assert "existing-agent" in agents_routes._agents

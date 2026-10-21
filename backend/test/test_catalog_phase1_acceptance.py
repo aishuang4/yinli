@@ -10,7 +10,6 @@ from src.agents.factory import _create_default_toolkit
 from src.agents.runtime_types import RuntimeToolScope
 from src.catalog.index import refresh_project_index
 from src.catalog.loader import catalog_fingerprint, invalidate_catalog
-from src.catalog.migrate_agents import ensure_agent_file_catalog
 from src.catalog.paths import extra_filesystem_scopes_for_workspace, profile_path
 from src.server.routes import agents as agents_routes
 from src.server.routes.chat.models import ChatMessage
@@ -26,7 +25,6 @@ from src.tools.scoped_read import ScopedRead
 def phase1_root(tmp_path, monkeypatch):
     monkeypatch.setattr("src.config.runtime_paths.USER_DATA_ROOT", tmp_path)
     invalidate_catalog()
-    ensure_agent_file_catalog()
     agents_routes._sync_agents_from_catalog()
     yield tmp_path
     database.forget_db(database.db_path())

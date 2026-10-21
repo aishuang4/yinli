@@ -1,7 +1,8 @@
 # 引力 YINLI · 上下文归属与存储重构 — 设计方案与实施方案
 
-版本：v1.6（2026-10-20）
-适用仓库：`/Users/aishuang/agent-workstation`，基线 `master@2771ead`
+版本：v1.6（2026-10-20），2026-10-21 起作为已落地的存储合同。
+阶段 1–4 已在 `refactor/context-storage` 提交。阶段 5 删掉旧 JSON 导入、`migrate_agents` 和启动时的目录搬迁，并用 `backend/test/test_context_storage_ratchet.py` 挡住这些路径回流。`health` 没有锁等待或库体积指标，本阶段不拆 `jobs.db` / `audit.db`。
+`openspec/changes/archive/2026-10-21-simplify-global-session-context` 与 `2026-10-21-unify-file-based-skill-loading` 不再作为实现依据。
 相关前置调研：《定时任务技能调度调研报告》《开源 Agent 项目与会话存储设计对照调研》《Hermes 存储设计调研与融合方案》
 
 ---
@@ -355,7 +356,7 @@ def resolve_capabilities(
 
 1. 清点并删除所有残留的兼容代码路径（`_ensure_column` 旧调用、`migrate_agents`、`legacy_migration`、`assign_owners`、旧 JSON 命名空间读取），CI 加 grep 棘轮防止回流。
 2. 删除 `openspec/changes/simplify-global-session-context`、`unify-file-based-skill-loading` 中已被覆盖的部分，归档本文档为权威说明。
-3. 若 `health` 显示 `state.db` 锁等待或体积成为问题，再按聚合拆 `jobs.db` / `audit.db`。
+3. 若 `health` 显示 `state.db` 锁等待或体积成为问题，再按聚合拆 `jobs.db` / `audit.db`。2026-10-21 检查时没有这两项指标，不拆。
 
 ### 时间线（粗估）
 1 先行；2 依赖 1；3 依赖 2 的 `RunContext`；4 与 3 可并行；5 最后。去掉阶段 0、迁移、双写与过渡期后，总计约 5–6 周单人，或 3–4 周两人并行。

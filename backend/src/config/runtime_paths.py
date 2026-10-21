@@ -10,7 +10,6 @@ hosted 下与租户数据相关的路径一律通过本模块的函数解析（�
 from __future__ import annotations
 
 import os
-import shutil
 from pathlib import Path
 from threading import RLock
 
@@ -93,16 +92,8 @@ def skill_packages_root() -> Path:
     return tenant_root() / "skills"
 
 
-def legacy_skill_packages_root() -> Path:
-    return data_root() / "skill_packages"
-
-
 def subagent_root() -> Path:
     return tenant_root() / "subagents"
-
-
-def legacy_subagent_root() -> Path:
-    return data_root() / "subagents"
 
 
 def agents_root() -> Path:
@@ -152,7 +143,7 @@ _ensured_lock = RLock()
 
 
 def ensure_tenant_directories() -> None:
-    """创建当前租户的数据目录并执行 legacy 迁移；每个租户只执行一次。"""
+    """创建当前租户的数据目录；每个租户只执行一次。"""
 
     from src.tenancy.context import current_tenant
 
@@ -175,8 +166,6 @@ def ensure_tenant_directories() -> None:
             tenant_root() / "backups",
         ):
             path.mkdir(parents=True, exist_ok=True)
-        _migrate_legacy_skill_packages()
-        _migrate_legacy_subagents()
         _ensured_tenants.add(ctx.tenant_id)
 
 
@@ -186,36 +175,3 @@ def forget_tenant_directories(tenant_id: str) -> None:
     with _ensured_lock:
         _ensured_tenants.discard(tenant_id)
 
-
-def _migrate_legacy_skill_packages() -> None:
-    """把旧 data/skill_packages 包安全迁移到运行时根目录 skills。"""
-
-    legacy = legacy_skill_packages_root()
-    if not legacy.is_dir():
-        return
-    for source in legacy.iterdir():
-        target = skill_packages_root() / source.name
-        if target.exists():
-            continue
-        try:
-            shutil.move(str(source), str(target))
-        except OSError:
-            # 单个包迁移失败不阻塞服务启动，后续仍可由记录逻辑修复。
-            continue
-
-
-def _migrate_legacy_subagents() -> None:
-    """把旧 data/subagents 定义安全迁移到运行时根目录 subagents。"""
-
-    legacy = legacy_subagent_root()
-    if not legacy.is_dir():
-        return
-    for source in legacy.iterdir():
-        target = subagent_root() / source.name
-        if target.exists():
-            continue
-        try:
-            shutil.move(str(source), str(target))
-        except OSError:
-            # 单个定义迁移失败不阻塞服务启动，后续仍可手动处理。
-            continue
