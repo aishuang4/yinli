@@ -83,8 +83,6 @@ export interface PlanConfig {
 export interface Agent {
   /** 唯一标识 */
   id: string;
-  /** 持久资源所属 Workspace。 */
-  workspaceId?: string;
   /** Agent 名称 */
   name: string;
   /** 头像 URL */

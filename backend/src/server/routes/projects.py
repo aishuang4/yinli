@@ -11,6 +11,7 @@ from src.storage.database import (
     delete_project,
     get_project,
     list_projects,
+    remove_project_folder,
     update_project,
 )
 from src.storage.project_records import ProjectNameError, assert_directory_grant
@@ -186,4 +187,20 @@ async def add_project_folder_record(slug: str, data: ProjectFolderCreateRequest)
         raise _name_error(exc) from exc
     if updated is None:
         raise HTTPException(status_code=409, detail="Project 已归档，不能追加目录")
+    return ProjectRecord.model_validate(updated)
+
+
+@router.delete("/projects/{slug}/folders", response_model=ProjectRecord)
+async def remove_project_folder_record(slug: str, data: ProjectFolderCreateRequest) -> ProjectRecord:
+    """移除非主目录授权。主目录不能删。托管模式返回 405。"""
+
+    if is_hosted_mode():
+        raise HTTPException(status_code=405, detail="托管模式不接受额外目录")
+    _require_project(slug)
+    try:
+        updated = remove_project_folder(slug, data.path)
+    except ProjectNameError as exc:
+        raise _name_error(exc) from exc
+    if updated is None:
+        raise HTTPException(status_code=409, detail="Project 已归档，不能移除目录")
     return ProjectRecord.model_validate(updated)

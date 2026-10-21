@@ -184,6 +184,34 @@ class ProjectRecordStore:
             conn.commit()
         return self.get_project(slug)
 
+    def remove_folder(self, slug: str, path: str) -> dict[str, Any] | None:
+        """移除非主目錄授權。主目錄保留。"""
+
+        if self.hosted():
+            raise ProjectNameError("托管模式不接受额外目录")
+        target = assert_directory_grant(path)
+        self.ensure_db()
+        now = self.utc_now()
+        with self.lock, self.connect() as conn:
+            project = conn.execute("SELECT slug, status FROM projects WHERE slug = ?", (slug,)).fetchone()
+            if project is None or project["status"] != "active":
+                return None
+            row = conn.execute(
+                "SELECT is_primary FROM project_folders WHERE project_slug = ? AND path = ?",
+                (slug, str(target)),
+            ).fetchone()
+            if row is None:
+                raise ProjectNameError("目录不在授权列表中")
+            if bool(row["is_primary"]):
+                raise ProjectNameError("主目录不能移除")
+            conn.execute(
+                "DELETE FROM project_folders WHERE project_slug = ? AND path = ?",
+                (slug, str(target)),
+            )
+            conn.execute("UPDATE projects SET updated_at = ? WHERE slug = ?", (now, slug))
+            conn.commit()
+        return self.get_project(slug)
+
     def delete_project(self, slug: str) -> bool:
         """删除非默认 Project。默认项目保留。"""
 

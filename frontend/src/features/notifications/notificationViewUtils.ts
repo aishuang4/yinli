@@ -73,7 +73,6 @@ export function unreadLabel(count: number): string {
 export function notificationFromDesktopPayload(payload: DesktopNotificationPayload): UserNotification {
   return {
     id: payload.id,
-    workspaceId: '',
     projectId: '',
     jobId: payload.jobId,
     firingId: payload.firingId,

@@ -8,11 +8,11 @@
  */
 
 import { useState } from 'react';
-import { Boxes, FolderKanban, GitBranch, PanelsTopLeft, Plus } from 'lucide-react';
+import { FolderKanban, GitBranch, PanelsTopLeft, Plus } from 'lucide-react';
 import { UserMenu } from '../features/auth/UserMenu';
 import { Select, Tooltip } from '@/components/design';
-import { useWorkspaceProjects } from '../hooks/useWorkspaceProjects';
-import { ContextCreateModal } from '../features/workspaces/ContextCreateModal';
+import { ProjectCreateModal } from '../features/projects/ProjectCreateModal';
+import { useProjects } from '../hooks/useProjects';
 import { useAppStore, type WorkspaceMode } from '../stores/appStore';
 import { isSurfaceEnabled } from '../stores/productFeatures';
 import { useProductFeaturesStore } from '../stores/productFeaturesStore';
@@ -33,20 +33,19 @@ export function TitleBar() {
   const setWorkspaceMode = useAppStore((s) => s.setWorkspaceMode);
   const workflowEnabled = useProductFeaturesStore((s) => isSurfaceEnabled(s.features, 'workflow'));
   const modeOptions = MODE_OPTIONS.filter((option) => option.id !== 'workflow' || workflowEnabled);
-  const setActiveContext = useAppStore((s) => s.setActiveContext);
   const currentView = useAppStore((state) => state.currentView);
   const userCenterInPageHeader = workspaceMode === 'workstation' && currentView === 'chat';
   const [createOpen, setCreateOpen] = useState(false);
   const {
-    workspaces,
-    projects,
-    activeWorkspaceId,
-    activeProjectId,
+    activeProjects,
+    activeProject,
+    activeProjectSlug,
     loading,
     error,
-    selectWorkspace,
     selectProject,
-  } = useWorkspaceProjects();
+    createProject,
+    archiveProject,
+  } = useProjects();
 
   return (
     <div
@@ -75,36 +74,34 @@ export function TitleBar() {
       </div>
       ) : null}
       {workspaceMode === 'workstation' && (
-        <div className="titlebar__runtime-context" title={error || undefined}>
-          <Tooltip title="Workspace 资源边界">
-            <Boxes size={14} strokeWidth={1.7} className="titlebar__context-icon" />
-          </Tooltip>
-          <Select
-            aria-label="选择 Workspace"
-            className="titlebar__context-select titlebar__context-select--workspace"
-            value={activeWorkspaceId || undefined}
-            loading={loading}
-            options={workspaces.map((workspace) => ({ label: workspace.name, value: workspace.id }))}
-            onChange={(value) => void selectWorkspace(String(value))}
-          />
-          <span className="titlebar__context-separator" />
-          <Tooltip title="当前 Project">
+        <div className="titlebar__runtime-context" title={error || activeProject?.primaryPath || undefined}>
+          <Tooltip title={activeProject?.primaryPath || '当前 Project'}>
             <FolderKanban size={14} strokeWidth={1.7} className="titlebar__context-icon" />
           </Tooltip>
           <Select
             aria-label="选择 Project"
             className="titlebar__context-select titlebar__context-select--project"
-            value={activeProjectId || undefined}
+            value={activeProjectSlug || 'default'}
             loading={loading}
-            disabled={projects.length === 0}
-            options={projects.map((project) => ({ label: project.name, value: project.id }))}
+            disabled={activeProjects.length === 0}
+            options={activeProjects.map((project) => ({ label: project.name, value: project.slug }))}
             onChange={(value) => selectProject(String(value))}
           />
-          <Tooltip title="新建 Workspace 或 Project" mode="dark">
+          {activeProjectSlug !== 'default' ? (
             <button
               type="button"
               className="titlebar__context-create"
-              aria-label="新建 Workspace 或 Project"
+              aria-label="归档当前 Project"
+              onClick={() => void archiveProject(activeProjectSlug)}
+            >
+              归档
+            </button>
+          ) : null}
+          <Tooltip title="新建 Project" mode="dark">
+            <button
+              type="button"
+              className="titlebar__context-create"
+              aria-label="新建 Project"
               onClick={() => setCreateOpen(true)}
             >
               <Plus size={15} strokeWidth={1.8} />
@@ -117,13 +114,11 @@ export function TitleBar() {
           <UserMenu className="icon-button h-8 w-8 rounded-lg" />
         </div>
       )}
-      <ContextCreateModal
+      <ProjectCreateModal
         open={createOpen}
-        workspaceId={activeWorkspaceId}
-        allowWorkspaceCreation
         onCancel={() => setCreateOpen(false)}
-        onCreated={(workspaceId, projectId) => {
-          setActiveContext(workspaceId, projectId);
+        onCreate={async (payload) => {
+          await createProject(payload);
           setCreateOpen(false);
         }}
       />

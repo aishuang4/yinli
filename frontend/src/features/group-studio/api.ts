@@ -12,8 +12,8 @@ import type {
   GroupStudioSnapshot,
 } from './types';
 
-export async function fetchStudioList(projectId: string): Promise<GroupStudioListItem[]> {
-  const response = await fetch(`/api/group-studio?projectId=${encodeURIComponent(projectId)}`);
+export async function fetchStudioList(projectSlug: string): Promise<GroupStudioListItem[]> {
+  const response = await fetch(`/api/group-studio?projectSlug=${encodeURIComponent(projectSlug)}`);
   if (!response.ok) {
     throw new Error(await readDetail(response, '无法加载群聊列表'));
   }
@@ -61,17 +61,17 @@ export async function fetchAvailableStudioAgents(groupId: string): Promise<Group
   return await response.json() as GroupStudioAgentOption[];
 }
 
-export async function updateStudioModel(groupId: string, projectId: string, modelConfigId: string): Promise<GroupStudioSnapshot> {
+export async function updateStudioModel(groupId: string, projectSlug: string, modelConfigId: string): Promise<GroupStudioSnapshot> {
   const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/model`, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ projectId, modelConfigId }),
+    body: JSON.stringify({ projectSlug, modelConfigId }),
   });
   if (!response.ok) throw new Error(await readDetail(response, '无法切换群聊模型'));
   return normalizeSnapshot(await response.json());
 }
 
 export async function updateStudioPin(groupId: string, input: {
-  projectId: string;
+  projectSlug: string;
   goal?: string;
   background?: string;
 }): Promise<GroupStudioPin> {
@@ -93,7 +93,7 @@ export async function updateStudioPin(groupId: string, input: {
 }
 
 export async function muteStudioMember(groupId: string, memberId: string, input: {
-  projectId: string;
+  projectSlug: string;
   muted: boolean;
 }): Promise<GroupStudioMember> {
   const response = await fetch(
@@ -111,7 +111,7 @@ export async function muteStudioMember(groupId: string, memberId: string, input:
 }
 
 export async function removeStudioMember(groupId: string, memberId: string, input: {
-  projectId: string;
+  projectSlug: string;
 }): Promise<GroupStudioMember> {
   const response = await fetch(
     `/api/group-studio/${encodeURIComponent(groupId)}/members/${encodeURIComponent(memberId)}/remove`,
@@ -171,13 +171,13 @@ function getDownloadFilename(contentDisposition: string | null): string | undefi
 
 export async function uploadStudioFile(
   groupId: string,
-  projectId: string,
+  projectSlug: string,
   file: File,
 ): Promise<GroupStudioFile> {
   const body = new FormData();
   body.append('file', file);
   const response = await fetch(
-    `/api/group-studio/${encodeURIComponent(groupId)}/files?projectId=${encodeURIComponent(projectId)}`,
+    `/api/group-studio/${encodeURIComponent(groupId)}/files?projectSlug=${encodeURIComponent(projectSlug)}`,
     { method: 'POST', body },
   );
   if (!response.ok) {
@@ -187,7 +187,7 @@ export async function uploadStudioFile(
 }
 
 export async function postStudioMessage(groupId: string, input: {
-  projectId: string;
+  projectSlug: string;
   body: string;
   mentions?: string[];
 }): Promise<GroupStudioMessage> {
@@ -202,11 +202,11 @@ export async function postStudioMessage(groupId: string, input: {
   return await response.json() as GroupStudioMessage;
 }
 
-export async function pauseStudio(groupId: string, projectId: string): Promise<GroupStudioSnapshot> {
+export async function pauseStudio(groupId: string, projectSlug: string): Promise<GroupStudioSnapshot> {
   const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/pause`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ projectId }),
+    body: JSON.stringify({ projectSlug }),
   });
   if (!response.ok) {
     throw new Error(await readDetail(response, '无法暂停工作室'));
@@ -214,11 +214,11 @@ export async function pauseStudio(groupId: string, projectId: string): Promise<G
   return normalizeSnapshot(await response.json());
 }
 
-export async function resumeStudio(groupId: string, projectId: string): Promise<GroupStudioSnapshot> {
+export async function resumeStudio(groupId: string, projectSlug: string): Promise<GroupStudioSnapshot> {
   const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/resume`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ projectId }),
+    body: JSON.stringify({ projectSlug }),
   });
   if (!response.ok) {
     throw new Error(await readDetail(response, '无法恢复工作室'));
@@ -226,11 +226,11 @@ export async function resumeStudio(groupId: string, projectId: string): Promise<
   return normalizeSnapshot(await response.json());
 }
 
-export async function rerunStudio(groupId: string, projectId: string): Promise<GroupStudioSnapshot> {
+export async function rerunStudio(groupId: string, projectSlug: string): Promise<GroupStudioSnapshot> {
   const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/rerun`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ projectId }),
+    body: JSON.stringify({ projectSlug }),
   });
   if (!response.ok) {
     throw new Error(await readDetail(response, '无法再来一轮'));
@@ -238,22 +238,22 @@ export async function rerunStudio(groupId: string, projectId: string): Promise<G
   return normalizeSnapshot(await response.json());
 }
 
-export async function interruptStudio(groupId: string, projectId: string): Promise<void> {
+export async function interruptStudio(groupId: string, projectSlug: string): Promise<void> {
   const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/interrupt`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ projectId }),
+    body: JSON.stringify({ projectSlug }),
   });
   if (!response.ok) {
     throw new Error(await readDetail(response, '无法停止当前发言'));
   }
 }
 
-export async function closeStudio(groupId: string, projectId: string, confirm: boolean): Promise<GroupStudioSnapshot> {
+export async function closeStudio(groupId: string, projectSlug: string, confirm: boolean): Promise<GroupStudioSnapshot> {
   const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/close`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ projectId, confirm }),
+    body: JSON.stringify({ projectSlug, confirm }),
   });
   if (!response.ok) {
     throw new Error(await readDetail(response, '无法结束群聊'));
@@ -261,9 +261,9 @@ export async function closeStudio(groupId: string, projectId: string, confirm: b
   return normalizeSnapshot(await response.json());
 }
 
-export async function deleteStudio(groupId: string, projectId: string): Promise<void> {
+export async function deleteStudio(groupId: string, projectSlug: string): Promise<void> {
   const response = await fetch(
-    `/api/group-studio/${encodeURIComponent(groupId)}?projectId=${encodeURIComponent(projectId)}`,
+    `/api/group-studio/${encodeURIComponent(groupId)}?projectSlug=${encodeURIComponent(projectSlug)}`,
     { method: 'DELETE' },
   );
   if (!response.ok) {
@@ -272,7 +272,7 @@ export async function deleteStudio(groupId: string, projectId: string): Promise<
 }
 
 export async function decideStudioApproval(groupId: string, input: {
-  projectId: string;
+  projectSlug: string;
   approvalId: string;
   decision: 'approve' | 'deny';
 }): Promise<GroupStudioApproval> {
@@ -288,7 +288,7 @@ export async function decideStudioApproval(groupId: string, input: {
 }
 
 export async function addStudioMember(groupId: string, input: {
-  projectId: string;
+  projectSlug: string;
   agentId: string;
 }): Promise<GroupStudioMember> {
   const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/members`, {
@@ -304,7 +304,7 @@ export async function addStudioMember(groupId: string, input: {
 
 export async function createStudioFromChat(input: {
   modelConfigId?: string;
-  projectId: string;
+  projectSlug: string;
   chatSessionId: string;
   agentId: string;
   draftText?: string;

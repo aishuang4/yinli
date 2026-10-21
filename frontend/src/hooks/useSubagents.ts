@@ -38,7 +38,7 @@ async function requestJson<T>(url: string): Promise<T> {
 }
 
 export function useSubagents(limit = 100): UseSubagentsReturn {
-  const activeProjectId = useAppStore((state) => state.activeProjectId);
+  const activeProjectSlug = useAppStore((state) => state.activeProjectSlug);
   const [definitions, setDefinitions] = useState<SubagentDefinition[]>([]);
   const [invocations, setInvocations] = useState<SubagentInvocation[]>([]);
   const [errors, setErrors] = useState<SubagentLoadError[]>([]);
@@ -49,17 +49,17 @@ export function useSubagents(limit = 100): UseSubagentsReturn {
 
   const loadInvocations = useCallback(async () => {
     const invocationList = await requestJson<SubagentInvocationListResponse>(
-      `/api/subagents/invocations?projectId=${encodeURIComponent(activeProjectId)}&limit=${limit}`,
+      `/api/subagents/invocations?projectSlug=${encodeURIComponent(activeProjectSlug)}&limit=${limit}`,
     );
     setInvocations(invocationList.items);
-  }, [activeProjectId, limit]);
+  }, [activeProjectSlug, limit]);
 
   const load = useCallback(async (showLoading: boolean) => {
     try {
       if (showLoading) setLoading(true);
       setError(null);
       const [catalog] = await Promise.all([
-        requestJson<SubagentCatalogResponse>(`/api/subagents?projectId=${encodeURIComponent(activeProjectId)}`),
+        requestJson<SubagentCatalogResponse>(`/api/subagents?projectSlug=${encodeURIComponent(activeProjectSlug)}`),
         loadInvocations(),
       ]);
       setDefinitions(catalog.definitions);
@@ -71,7 +71,7 @@ export function useSubagents(limit = 100): UseSubagentsReturn {
     } finally {
       if (showLoading) setLoading(false);
     }
-  }, [activeProjectId, loadInvocations]);
+  }, [activeProjectSlug, loadInvocations]);
 
   const refresh = useCallback(async () => {
     await load(true);

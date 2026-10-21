@@ -184,9 +184,13 @@ export function ScheduledJobDetailPage({
                 </Tag>
               ))}
             </div>
-            {job.skillIds.length > 0 ? (
-              <div className="mt-3 text-xs text-[var(--color-text-tertiary)]">
-                Skills：{job.skillIds.join('、')}
+            {(job.requiredSkills || []).length > 0 ? (
+              <div className="mt-3 space-y-1 text-xs text-[var(--color-text-tertiary)]">
+                {(job.requiredSkills || []).map((skill) => (
+                  <div key={skill.id}>
+                    {skill.id} · {skill.origin || 'explicit'} · {skill.sourceScope || 'unknown'} · {(skill.contentSha256 || '').slice(0, 8)} · {skill.frozenAt}
+                  </div>
+                ))}
               </div>
             ) : (
               <div className="mt-3 text-xs text-[var(--color-text-tertiary)]">未冻结 Skill</div>

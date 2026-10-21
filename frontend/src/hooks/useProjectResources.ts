@@ -1,52 +1,13 @@
-/** 当前 Project 资源 binding 读取 Hook。 */
+/** Project 资源绑定已删除。Skill / MCP / HTTP 按租户目录可见，这里只保留空集合给旧调用点。 */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { ProjectResourceBinding, ProjectResourceType } from '../types/workspace';
+import { useMemo } from 'react';
 
-export function useProjectResources(projectId: string) {
-  const [bindings, setBindings] = useState<ProjectResourceBinding[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  const refresh = useCallback(async (signal?: AbortSignal) => {
-    if (!projectId) {
-      setBindings([]);
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    try {
-      const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/resources`, {
-        signal,
-        cache: 'no-store',
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      setBindings(await response.json() as ProjectResourceBinding[]);
-    } catch (error) {
-      if (!(error instanceof DOMException && error.name === 'AbortError')) setBindings([]);
-    } finally {
-      if (!signal?.aborted) setLoading(false);
-    }
-  }, [projectId]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    setBindings([]);
-    void refresh(controller.signal);
-    return () => controller.abort();
-  }, [projectId, refresh]);
-
-  const enabledByType = useMemo(() => {
-    const result: Record<ProjectResourceType, Set<string>> = {
-      agent: new Set(),
-      skill: new Set(),
-      mcp: new Set(),
-      http_tool: new Set(),
-    };
-    bindings.forEach((binding) => {
-      if (binding.enabled) result[binding.resourceType].add(binding.resourceId);
-    });
-    return result;
-  }, [bindings]);
-
-  return { bindings, enabledByType, loading, refresh: () => refresh() };
+export function useProjectResources(_projectSlug: string) {
+  const enabledByType = useMemo(() => ({
+    agent: new Set<string>(),
+    skill: new Set<string>(),
+    mcp: new Set<string>(),
+    http_tool: new Set<string>(),
+  }), []);
+  return { bindings: [], enabledByType, loading: false, refresh: async () => undefined };
 }

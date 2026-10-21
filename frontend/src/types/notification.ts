@@ -2,7 +2,6 @@
 
 export interface UserNotification {
   id: string;
-  workspaceId: string;
   projectId: string;
   jobId: string;
   firingId: string;

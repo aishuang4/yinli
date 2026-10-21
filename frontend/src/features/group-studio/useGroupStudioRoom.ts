@@ -88,9 +88,8 @@ export function useGroupStudioRoom() {
   const openGroupStudio = useAppStore((state) => state.openGroupStudio);
   const studioSurface = useAppStore((state) => state.studioSurface);
   const localStudioSeed = useAppStore((state) => state.localStudioSeed);
-  const activeProjectId = useAppStore((state) => state.activeProjectId);
-  const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
-  const setView = useAppStore((state) => state.setView);
+  const activeProjectSlug = useAppStore((state) => state.activeProjectSlug);
+    const setView = useAppStore((state) => state.setView);
   const { catalog: modelCatalog, loading: modelsLoading, error: modelsError } = useModelCatalog();
   const { agents, refresh: refreshAgents } = useAgents();
   const isDraft = studioSurface !== 'none' && !groupId;
@@ -116,7 +115,7 @@ export function useGroupStudioRoom() {
   const [draftModelId, setDraftModelId] = useState('');
   const [pendingOpenSend, setPendingOpenSend] = useState<{
     groupId: string;
-    projectId: string;
+    projectSlug: string;
     body: string;
     mentions: string[];
     files: StudioComposerAttachment[];
@@ -181,13 +180,13 @@ export function useGroupStudioRoom() {
   const refreshStudioList = useCallback(async () => {
     setStudiosLoading(true);
     try {
-      setStudios(await fetchStudioList(activeProjectId));
+      setStudios(await fetchStudioList(activeProjectSlug));
     } catch (cause) {
       notifyError(getErrorMessage(cause, '无法加载群聊列表'));
     } finally {
       setStudiosLoading(false);
     }
-  }, [activeProjectId]);
+  }, [activeProjectSlug]);
 
   useEffect(() => {
     if (studioSurface === 'none') {
@@ -240,7 +239,7 @@ export function useGroupStudioRoom() {
     const item = deleteConfirm;
     setDeleting(true);
     try {
-      await deleteStudio(item.id, activeProjectId);
+      await deleteStudio(item.id, activeProjectSlug);
       await refreshStudioList();
       if (groupId === item.id) {
         const nextStudio = studios.find((studio) => studio.id !== item.id);
@@ -271,7 +270,7 @@ export function useGroupStudioRoom() {
     }
     if (!studio) return;
     try {
-      const updated = await updateStudioModel(studio.id, studio.projectId, modelConfigId);
+      const updated = await updateStudioModel(studio.id, studio.projectSlug, modelConfigId);
       setStudio(updated);
     } catch (cause) {
       notifyError(getErrorMessage(cause, '无法切换群聊模型'));
@@ -407,8 +406,8 @@ export function useGroupStudioRoom() {
     }
     return {
       id: '',
-      projectId: activeProjectId,
-      workspaceId: activeWorkspaceId,
+      projectSlug: activeProjectSlug,
+      
       chatSessionId: localStudioSeed?.chatSessionId || '',
       title: '',
       status: 'open',
@@ -420,8 +419,7 @@ export function useGroupStudioRoom() {
       updatedAt: '',
     };
   }, [
-    activeProjectId,
-    activeWorkspaceId,
+    activeProjectSlug,
     draftMembers,
     draftModelId,
     goal,
@@ -480,8 +478,7 @@ export function useGroupStudioRoom() {
         .filter((agent) => (
           isInvitableAgent(agent.id, agent.role)
           && !seated.has(agent.id)
-          && (!agent.workspaceId || agent.workspaceId === activeWorkspaceId)
-        ))
+                  ))
         .map((agent) => ({
           id: agent.id,
           name: agent.name,
@@ -489,7 +486,7 @@ export function useGroupStudioRoom() {
         }));
     }
     return availableAgents.filter((agent) => agent.id !== 'default' && !seated.has(agent.id));
-  }, [activeWorkspaceId, agents, availableAgents, isDraft, members]);
+  }, [agents, availableAgents, isDraft, members]);
 
   const refreshAvailableAgents = useCallback((targetId: string) => {
     return fetchAvailableStudioAgents(targetId)
@@ -509,7 +506,7 @@ export function useGroupStudioRoom() {
     }
     setSavingCard(true);
     try {
-      await updateStudioPin(studio.id, { projectId: studio.projectId, goal: trimmed });
+      await updateStudioPin(studio.id, { projectSlug: studio.projectSlug, goal: trimmed });
       await refreshStudio(studio.id);
       await refreshStudioList();
       notifySuccess('置顶备注已保存');
@@ -551,7 +548,7 @@ export function useGroupStudioRoom() {
     setAdding(true);
     setAddingAgentId(agentId);
     try {
-      await addStudioMember(studio.id, { projectId: studio.projectId, agentId });
+      await addStudioMember(studio.id, { projectSlug: studio.projectSlug, agentId });
       await refreshStudio(studio.id);
       await refreshAvailableAgents(studio.id);
       await refreshStudioList();
@@ -592,7 +589,7 @@ export function useGroupStudioRoom() {
     }
     setMemberBusyId(memberId);
     try {
-      await muteStudioMember(studio.id, memberId, { projectId: studio.projectId, muted });
+      await muteStudioMember(studio.id, memberId, { projectSlug: studio.projectSlug, muted });
       await refreshStudio(studio.id);
       notifySuccess(muted ? '已静音' : '已取消静音');
     } catch (cause) {
@@ -614,7 +611,7 @@ export function useGroupStudioRoom() {
     }
     setMemberBusyId(memberId);
     try {
-      await removeStudioMember(studio.id, memberId, { projectId: studio.projectId });
+      await removeStudioMember(studio.id, memberId, { projectSlug: studio.projectSlug });
       await refreshStudio(studio.id);
       await refreshAvailableAgents(studio.id);
       notifySuccess('已移出工作室');
@@ -660,7 +657,7 @@ export function useGroupStudioRoom() {
     setApprovalBusy(true);
     try {
       const updated = await decideStudioApproval(studio.id, {
-        projectId: studio.projectId,
+        projectSlug: studio.projectSlug,
         approvalId: studio.currentApproval.id,
         decision,
       });
@@ -674,19 +671,19 @@ export function useGroupStudioRoom() {
   };
 
   const postToStudio = async (
-    target: { id: string; projectId: string },
+    target: { id: string; projectSlug: string },
     body: string,
     nextMentions: string[],
     attachments: StudioComposerAttachment[],
   ) => {
     const uploaded: GroupStudioFile[] = [];
     for (const attachment of attachments) {
-      uploaded.push(await uploadStudioFile(target.id, target.projectId, attachment.file));
+      uploaded.push(await uploadStudioFile(target.id, target.projectSlug, attachment.file));
     }
     const names = uploaded.map((item) => item.title).join('、');
     const text = body.trim() || (names ? `上传了文件：${names}` : '');
     await postStudioMessage(target.id, {
-      projectId: target.projectId,
+      projectSlug: target.projectSlug,
       body: text,
       mentions: nextMentions,
     });
@@ -700,7 +697,7 @@ export function useGroupStudioRoom() {
   const persistDraftStudio = async () => {
     const firstAgentId = draftMembers.find((item) => isInvitableAgent(item.agentId))?.agentId || 'default';
     const created = await createStudioFromChat({
-      projectId: activeProjectId,
+      projectSlug: activeProjectSlug,
       chatSessionId: localStudioSeed?.chatSessionId || createId(),
       agentId: firstAgentId,
       modelConfigId: draftModelId || modelCatalog?.defaultModelId,
@@ -714,21 +711,21 @@ export function useGroupStudioRoom() {
       let live = seated;
       if (!live) {
         live = await addStudioMember(created.id, {
-          projectId: created.projectId,
+          projectSlug: created.projectSlug,
           agentId: member.agentId,
         });
       }
       mentionMap.set(member.id, live.id);
       if (member.muted && !live.muted) {
         await muteStudioMember(created.id, live.id, {
-          projectId: created.projectId,
+          projectSlug: created.projectSlug,
           muted: true,
         });
       }
     }
     if (goal.trim()) {
       await updateStudioPin(created.id, {
-        projectId: created.projectId,
+        projectSlug: created.projectSlug,
         goal: goal.trim(),
       });
     }
@@ -747,7 +744,7 @@ export function useGroupStudioRoom() {
     const timer = window.setTimeout(() => {
       setPendingOpenSend(null);
       void postToStudio(
-        { id: pending.groupId, projectId: pending.projectId },
+        { id: pending.groupId, projectSlug: pending.projectSlug },
         pending.body,
         pending.mentions,
         pending.files,
@@ -771,7 +768,7 @@ export function useGroupStudioRoom() {
         openGroupStudio(persisted.created.id);
         setPendingOpenSend({
           groupId: persisted.created.id,
-          projectId: persisted.created.projectId,
+          projectSlug: persisted.created.projectSlug,
           body: draft.trim(),
           mentions: persisted.mentions,
           files: fileAttachments,
@@ -797,7 +794,7 @@ export function useGroupStudioRoom() {
       return;
     }
     try {
-      await interruptStudio(studio.id, studio.projectId);
+      await interruptStudio(studio.id, studio.projectSlug);
       await refreshStudio(studio.id);
     } catch (cause) {
       notifyError(getErrorMessage(cause, '无法停止'));
@@ -809,7 +806,7 @@ export function useGroupStudioRoom() {
       return;
     }
     try {
-      const next = await rerunStudio(studio.id, studio.projectId);
+      const next = await rerunStudio(studio.id, studio.projectSlug);
       setStudio(next);
     } catch (cause) {
       notifyError(getErrorMessage(cause, '无法再来一轮'));
@@ -834,8 +831,7 @@ export function useGroupStudioRoom() {
     openGroupStudio,
     studioSurface,
     localStudioSeed,
-    activeProjectId,
-    activeWorkspaceId,
+    activeProjectSlug,
     setView,
     modelCatalog,
     modelsLoading,

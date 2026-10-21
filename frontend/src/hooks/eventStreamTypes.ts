@@ -148,7 +148,7 @@ export interface UseEventStreamReturn {
 
 /** 发送消息选项 */
 export interface SendMessageOptions {
-  projectId?: string;
+  projectSlug?: string;
   agentId?: string;
   agentName?: string;
   mode?: 'agent' | 'team';

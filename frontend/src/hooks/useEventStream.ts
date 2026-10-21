@@ -43,7 +43,7 @@ function initialState(): StreamState {
 }
 
 export function useEventStream(): UseEventStreamReturn {
-  const activeProjectId = useAppStore((storeState) => storeState.activeProjectId);
+  const activeProjectSlug = useAppStore((storeState) => storeState.activeProjectSlug);
   const [state, setReactState] = useState<StreamState>(() => initialState());
   const stateRef = useRef(state);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -118,7 +118,7 @@ export function useEventStream(): UseEventStreamReturn {
     }));
     if (runId) {
       try {
-        const params = new URLSearchParams({ projectId: activeProjectId });
+        const params = new URLSearchParams({ projectSlug: activeProjectSlug });
         const response = await fetch(
           `/api/chat/runs/${encodeURIComponent(runId)}/cancel?${params.toString()}`,
           { method: 'POST' },
@@ -138,14 +138,14 @@ export function useEventStream(): UseEventStreamReturn {
       cancelled: true,
       runCompletedAt: current.runCompletedAt || new Date().toISOString(),
     }));
-  }, [activeProjectId, setState]);
+  }, [activeProjectSlug, setState]);
 
   const steer = useCallback(async (message: string, options?: { agentId?: string; agentName?: string }) => {
     const runId = stateRef.current.currentRunId;
     if (!runId || !stateRef.current.isStreaming) {
       throw new Error('当前没有进行中的对话');
     }
-    const params = new URLSearchParams({ projectId: activeProjectId });
+    const params = new URLSearchParams({ projectSlug: activeProjectSlug });
     const response = await fetch(
       `/api/chat/runs/${encodeURIComponent(runId)}/steer?${params.toString()}`,
       {
@@ -159,7 +159,7 @@ export function useEventStream(): UseEventStreamReturn {
       },
     );
     if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-  }, [activeProjectId]);
+  }, [activeProjectSlug]);
 
   const subscribeRun = useCallback(async (runId: string) => {
     if (!runId) return;
@@ -181,7 +181,7 @@ export function useEventStream(): UseEventStreamReturn {
     try {
       let forceSnapshot = false;
       while (true) {
-        const params = new URLSearchParams({ projectId: activeProjectId });
+        const params = new URLSearchParams({ projectSlug: activeProjectSlug });
         if (!forceSnapshot) params.set('afterSeq', String(afterSeq));
         const response = await fetch(`/api/chat/runs/${encodeURIComponent(runId)}/stream?${params.toString()}`, {
           signal: controller.signal,
@@ -212,7 +212,7 @@ export function useEventStream(): UseEventStreamReturn {
         activeSubscriptionRunIdRef.current = '';
       }
     }
-  }, [activeProjectId, readEventStream, setState]);
+  }, [activeProjectSlug, readEventStream, setState]);
 
   const sendMessage = useCallback(async (message: string, options?: SendMessageOptions) => {
     abortControllerRef.current?.abort();
@@ -227,7 +227,7 @@ export function useEventStream(): UseEventStreamReturn {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message,
-          project_id: options?.projectId,
+          projectSlug: options?.projectSlug,
           display_message: options?.displayMessage,
           agent_id: options?.agentId,
           agent_name: options?.agentName,

@@ -43,7 +43,7 @@ import type {
 } from '../types/memory';
 
 export function MemoryPage() {
-  const activeProjectId = useAppStore((state) => state.activeProjectId);
+  const activeProjectSlug = useAppStore((state) => state.activeProjectSlug);
   const { agents, loading: agentsLoading, refresh: refreshAgents } = useAgents();
   const {
     readMarkdownMemory,
@@ -123,7 +123,7 @@ export function MemoryPage() {
     void loadSkillQueue();
     void loadCandidates();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeProjectId]);
+  }, [activeProjectSlug]);
 
   useEffect(() => {
     if (activeTab === 'candidates') {

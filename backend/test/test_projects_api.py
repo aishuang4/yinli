@@ -59,6 +59,18 @@ def _assert_project_lifecycle(client: TestClient, tmp_path: Path) -> None:
     )
     assert added.status_code == 201
     assert any(item["path"] == str(extra.resolve()) for item in added.json()["folders"])
+    removed = client.request(
+        "DELETE",
+        f"/api/projects/{slug}/folders",
+        json={"path": str(extra.resolve())},
+    )
+    assert removed.status_code == 200
+    assert all(item["path"] != str(extra.resolve()) for item in removed.json()["folders"])
+    assert client.request(
+        "DELETE",
+        f"/api/projects/{slug}/folders",
+        json={"path": str(root.resolve())},
+    ).status_code == 422
 
     parent = client.post(
         f"/api/projects/{slug}/folders",

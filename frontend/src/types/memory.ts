@@ -21,13 +21,11 @@ export interface TimelineMessage {
   agentName: string;
   createdAt: string;
   surface: string;
-  workspaceId: string;
-  projectId: string;
+  projectSlug: string;
 }
 
 export interface TimelineQuery {
-  workspaceId?: string;
-  projectId?: string;
+  projectSlug?: string;
   agentId?: string;
   surface?: string;
   timeFrom?: string;
@@ -92,7 +90,6 @@ export interface MemoryMarkdownCandidate {
   resolution: string;
   agentId: string;
   agentName: string;
-  workspaceId: string;
   projectId: string;
   sourceSessionId: string;
   sourceRunId: string;
@@ -105,7 +102,6 @@ export type SkillEvolutionRecordAction = 'skip' | 'restore_draft' | 'mark_failed
 
 export interface SkillEvolutionRecord {
   id: string;
-  workspaceId: string;
   projectId: string;
   agentId: string;
   agentName: string;

@@ -7,8 +7,7 @@ import { useNotificationStore } from './notificationStore';
 export function resetTenantState(): void {
   useAppStore.setState({
     currentView: 'chat',
-    activeWorkspaceId: 'default',
-    activeProjectId: 'default',
+    activeProjectSlug: 'default',
     pendingJobId: null,
     studioSurface: 'none',
     studioTransition: 'idle',

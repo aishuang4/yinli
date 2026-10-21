@@ -15,7 +15,6 @@ import type {
 } from '../types/agent';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 import { mapApiAgent, useAgentsStore } from '../stores/agentsStore';
-import { useAppStore } from '../stores/appStore';
 
 /** Hook 返回值 */
 interface UseAgentsReturn {
@@ -45,8 +44,7 @@ function mapToApiPayload(data: AgentCreatePayload | AgentUpdatePayload): Record<
   const result: Record<string, unknown> = {};
 
   if ('name' in data && data.name !== undefined) result.name = data.name;
-  if ('workspaceId' in data && data.workspaceId !== undefined) result.workspaceId = data.workspaceId;
-  if ('avatar' in data && data.avatar !== undefined) result.avatar = data.avatar;
+    if ('avatar' in data && data.avatar !== undefined) result.avatar = data.avatar;
   if ('description' in data && data.description !== undefined) result.description = data.description;
   if ('systemPrompt' in data && data.systemPrompt !== undefined) result.system_prompt = data.systemPrompt;
   if ('tags' in data && data.tags !== undefined) result.tags = data.tags;
@@ -97,16 +95,15 @@ function mapToApiPayload(data: AgentCreatePayload | AgentUpdatePayload): Record<
  * useAgents Hook
  */
 export function useAgents(): UseAgentsReturn {
-  const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
-  const agents = useAgentsStore((state) => state.agents);
+    const agents = useAgentsStore((state) => state.agents);
   const loading = useAgentsStore((state) => state.loading);
   const error = useAgentsStore((state) => state.error);
   const upsertAgent = useAgentsStore((state) => state.upsertAgent);
   const removeAgent = useAgentsStore((state) => state.removeAgent);
 
   const refresh = useCallback(async (options?: { silent?: boolean }) => {
-    await useAgentsStore.getState().syncFromServer(activeWorkspaceId, options);
-  }, [activeWorkspaceId]);
+    await useAgentsStore.getState().syncFromServer(options);
+  }, []);
 
   /** 创建 Agent */
   const createAgent = useCallback(async (payload: AgentCreatePayload): Promise<Agent> => {
@@ -114,7 +111,7 @@ export function useAgents(): UseAgentsReturn {
       const res = await fetch('/api/agents', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(mapToApiPayload({ ...payload, workspaceId: activeWorkspaceId })),
+        body: JSON.stringify(mapToApiPayload({ ...payload,  })),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -128,7 +125,7 @@ export function useAgents(): UseAgentsReturn {
       notifyError(`Agent 创建失败：${getErrorMessage(err, '未知错误')}`);
       throw err;
     }
-  }, [activeWorkspaceId, upsertAgent]);
+  }, [upsertAgent]);
 
   /** 更新 Agent */
   const updateAgent = useCallback(async (id: string, payload: AgentUpdatePayload): Promise<Agent> => {

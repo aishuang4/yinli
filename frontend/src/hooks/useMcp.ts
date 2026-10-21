@@ -40,8 +40,7 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export function useMcp(): UseMcpReturn {
-  const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
-  const activeProjectId = useAppStore((state) => state.activeProjectId);
+    const activeProjectSlug = useAppStore((state) => state.activeProjectSlug);
   const [servers, setServers] = useState<McpServer[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -52,7 +51,7 @@ export function useMcp(): UseMcpReturn {
       setLoading(true);
       setError(null);
       const [serverList, categoryList] = await Promise.all([
-        requestJson<McpServer[]>(`/api/mcp?workspaceId=${encodeURIComponent(activeWorkspaceId)}`),
+        requestJson<McpServer[]>(`/api/mcp`),
         requestJson<string[]>('/api/mcp/categories'),
       ]);
       setServers(serverList);
@@ -62,7 +61,7 @@ export function useMcp(): UseMcpReturn {
     } finally {
       setLoading(false);
     }
-  }, [activeWorkspaceId]);
+  }, []);
 
   const updateServer = useCallback((server: McpServer) => {
     setServers((prev) => {
@@ -78,9 +77,9 @@ export function useMcp(): UseMcpReturn {
       const server = await requestJson<McpServer>('/api/mcp/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...payload, workspaceId: activeWorkspaceId }),
+        body: JSON.stringify({ ...payload,  }),
       });
-      await bindProjectResource(activeProjectId, 'mcp', server.id);
+      await bindProjectResource(activeProjectSlug, 'mcp', server.id);
       updateServer(server);
       setCategories((prev) => (
         prev.includes(server.category) ? prev : [...prev, server.category].sort()
@@ -91,7 +90,7 @@ export function useMcp(): UseMcpReturn {
       notifyError(`MCP 注册失败：${getErrorMessage(err, '未知错误')}`);
       throw err;
     }
-  }, [activeProjectId, activeWorkspaceId, updateServer]);
+  }, [activeProjectSlug, updateServer]);
 
   const installServer = useCallback(async (id: string) => {
     try {
@@ -173,8 +172,7 @@ export function useMcp(): UseMcpReturn {
 }
 
 export function useInstalledMcpTools(): UseInstalledMcpToolsReturn {
-  const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
-  const [tools, setTools] = useState<McpTool[]>([]);
+    const [tools, setTools] = useState<McpTool[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -183,14 +181,14 @@ export function useInstalledMcpTools(): UseInstalledMcpToolsReturn {
       setLoading(true);
       setError(null);
       setTools(await requestJson<McpTool[]>(
-        `/api/mcp/tools?workspaceId=${encodeURIComponent(activeWorkspaceId)}`,
+        `/api/mcp/tools`,
       ));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load MCP tools');
     } finally {
       setLoading(false);
     }
-  }, [activeWorkspaceId]);
+  }, []);
 
   useEffect(() => {
     refresh();

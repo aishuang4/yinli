@@ -24,7 +24,7 @@ import { useAgents } from '../hooks/useAgents';
 import { useOnPageBecameActive } from '../hooks/usePageActive';
 import { useAgentsStore } from '../stores/agentsStore';
 import { useProjectResources } from '../hooks/useProjectResources';
-import { useWorkspaceProjects } from '../hooks/useWorkspaceProjects';
+import { useProjects } from '../hooks/useProjects';
 import { useAppStore } from '../stores/appStore';
 import { isSurfaceEnabled } from '../stores/productFeatures';
 import { useProductFeaturesStore } from '../stores/productFeaturesStore';
@@ -88,8 +88,8 @@ export function ChatPage() {
   const [previewTarget, setPreviewTarget] = useState<FilePreviewTarget | null>(null);
   const teamModeEnabled = useProductFeaturesStore((state) => isSurfaceEnabled(state.features, 'teamMode'));
   const planModeEnabled = useProductFeaturesStore((state) => isSurfaceEnabled(state.features, 'planMode'));
-  const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
-  const activeProjectId = useAppStore((state) => state.activeProjectId);
+  const activeProjectSlug = useAppStore((state) => state.activeProjectSlug);
+  const setActiveProject = useAppStore((state) => state.setActiveProject);
   const historyTransitionTimerRef = useRef<number | null>(null);
   const historyExpandFrameRef = useRef<number | null>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
@@ -100,10 +100,9 @@ export function ChatPage() {
   const pendingSessionRef = useRef<ChatSession | null>(null);
   const { state, sendMessage, resumeInteraction, subscribeRun, abort, steer, reset } = useEventStream();
   const { agents, loading: agentsLoading } = useAgents();
-  const { enabledByType, loading: projectResourcesLoading } = useProjectResources(activeProjectId);
+  const { enabledByType, loading: projectResourcesLoading } = useProjectResources(activeProjectSlug);
   const { skills: enabledSkills, loading: skillsLoading } = useEnabledSkills();
-  const { workspaces, allProjects } = useWorkspaceProjects();
-  const setActiveContext = useAppStore((state) => state.setActiveContext);
+  const { activeProject } = useProjects();
   const {
     fileAttachments,
     handleFile,
@@ -124,7 +123,7 @@ export function ChatPage() {
 
   // 打包桌面端 Chat keep-alive 不卸载，回到本页时静默同步 Agent 列表。
   useOnPageBecameActive(() => {
-    void useAgentsStore.getState().syncFromServer(activeWorkspaceId, { silent: true });
+    void useAgentsStore.getState().syncFromServer({ silent: true });
   });
 
   useEffect(() => {
@@ -141,11 +140,7 @@ export function ChatPage() {
 
   const availableAgents = useMemo(() => agents.filter((agent) => (
     agent.role !== 'job'
-    && (
-      agent.id === 'default'
-      || agent.workspaceId === activeWorkspaceId
-    )
-  )), [activeWorkspaceId, agents]);
+  )), [agents]);
 
   const selectedAgent = useMemo(
     () => availableAgents.find((agent) => agent.id === selectedAgentId)
@@ -186,7 +181,7 @@ export function ChatPage() {
     setSavingModelChoice(true);
     try {
       if (activeSessionId && sessions.some(s => s.id === activeSessionId)) {
-        const response = await fetch(`/api/chat/sessions/${encodeURIComponent(activeSessionId)}/model?projectId=${encodeURIComponent(activeProjectId)}`, {
+        const response = await fetch(`/api/chat/sessions/${encodeURIComponent(activeSessionId)}/model?projectSlug=${encodeURIComponent(activeProjectSlug)}`, {
           method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelConfigId: value }),
         });
         if (!response.ok) { const data = await response.json(); throw new Error(data.detail || '模型选择保存失败'); }
@@ -252,7 +247,7 @@ export function ChatPage() {
     shortcutLabel: studioShortcut,
   } = useGroupStudioEntry({
     modelConfigId: selectedModelId,
-    activeProjectId,
+    activeProjectSlug,
     activeSessionId,
     agentId: runtimeAgent?.id || 'default',
     chatRunBlocking,
@@ -319,7 +314,8 @@ export function ChatPage() {
       if (!silent) {
         setSessionsLoading(true);
       }
-      const response = await fetch('/api/chat/sessions/catalog');
+      const params = new URLSearchParams({ projectSlug: activeProjectSlug });
+      const response = await fetch(`/api/chat/sessions?${params.toString()}`);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data: ChatSession[] = await response.json();
       if (sessionsRequestRef.current === requestId) setSessions(data);
@@ -328,14 +324,14 @@ export function ChatPage() {
         setSessionsLoading(false);
       }
     }
-  }, []);
+  }, [activeProjectSlug]);
 
-  const loadSessionMessages = useCallback(async (sessionId: string, projectId = activeProjectId) => {
+  const loadSessionMessages = useCallback(async (sessionId: string, projectSlug = activeProjectSlug) => {
     const requestId = messagesRequestRef.current + 1;
     messagesRequestRef.current = requestId;
     setMessagesLoading(true);
     try {
-    const params = new URLSearchParams({ projectId });
+    const params = new URLSearchParams({ projectSlug });
     const response = await fetch(`/api/chat/sessions/${sessionId}/messages?${params.toString()}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data: StoredChatMessage[] = await response.json();
@@ -364,7 +360,7 @@ export function ChatPage() {
     } finally {
       if (messagesRequestRef.current === requestId) setMessagesLoading(false);
     }
-  }, [activeProjectId]);
+  }, [activeProjectSlug]);
 
   const activateSession = useCallback(async (session: ChatSession) => {
     recoveredRunRef.current = '';
@@ -379,7 +375,7 @@ export function ChatPage() {
     resetAttachments();
     setChatError(null);
     resetScroll();
-    await loadSessionMessages(session.id, session.project_id);
+    await loadSessionMessages(session.id, session.projectSlug);
   }, [loadSessionMessages, reset, resetAttachments, resetScroll]);
 
   useEffect(() => {
@@ -398,15 +394,11 @@ export function ChatPage() {
     setChatError(null);
     reset();
     const pendingSession = pendingSessionRef.current;
-    if (
-      pendingSession &&
-      pendingSession.workspace_id === activeWorkspaceId &&
-      pendingSession.project_id === activeProjectId
-    ) {
+    if (pendingSession && pendingSession.projectSlug === activeProjectSlug) {
       pendingSessionRef.current = null;
       void activateSession(pendingSession);
     }
-  }, [activeProjectId, activeWorkspaceId, activateSession, reset, resetAttachments]);
+  }, [activeProjectSlug, activateSession, reset, resetAttachments]);
 
   useEffect(() => {
     void loadSessions();
@@ -424,7 +416,7 @@ export function ChatPage() {
 
     async function recoverActiveRun() {
       try {
-        const params = new URLSearchParams({ projectId: activeProjectId });
+        const params = new URLSearchParams({ projectSlug: activeProjectSlug });
         const response = await fetch(`/api/chat/runs?${params.toString()}`);
         if (!response.ok) return;
         const data = await response.json();
@@ -457,7 +449,7 @@ export function ChatPage() {
     return () => {
       cancelled = true;
     };
-  }, [activeProjectId, activeSessionId, hasLiveResponse, subscribeRun]);
+  }, [activeProjectSlug, activeSessionId, hasLiveResponse, subscribeRun]);
 
   const handleNewSession = useCallback(() => {
     if (state.isStreaming) return;
@@ -495,18 +487,18 @@ export function ChatPage() {
 
   const handleSelectSession = useCallback(async (session: ChatSession) => {
     if (state.isStreaming) return;
-    if (session.project_id !== activeProjectId || session.workspace_id !== activeWorkspaceId) {
+    if (session.projectSlug && session.projectSlug !== activeProjectSlug) {
       pendingSessionRef.current = session;
-      setActiveContext(session.workspace_id, session.project_id);
+      setActiveProject(session.projectSlug);
       return;
     }
     await activateSession(session);
-  }, [activeProjectId, activeWorkspaceId, activateSession, setActiveContext, state.isStreaming]);
+  }, [activeProjectSlug, activateSession, setActiveProject, state.isStreaming]);
 
   const handleDeleteSession = useCallback(async (session: ChatSession) => {
     if (state.isStreaming) return;
     try {
-      const params = new URLSearchParams({ projectId: session.project_id });
+      const params = new URLSearchParams({ projectSlug: session.projectSlug });
       const response = await fetch(`/api/chat/sessions/${session.id}?${params.toString()}`, { method: 'DELETE' });
       if (!response.ok && response.status !== 404) throw new Error(`HTTP ${response.status}`);
       setSessions((current) => current.filter((item) => item.id !== session.id));
@@ -552,7 +544,7 @@ export function ChatPage() {
       }
       return;
     }
-    if (!activeProjectId) {
+    if (!activeProjectSlug) {
       setChatError('请先在设置中选择 Workspace 和 Project。');
       return;
     }
@@ -574,7 +566,7 @@ export function ChatPage() {
     }));
     let files: ChatFilePayload[];
     try {
-      files = await uploadFilesForSession(fileAttachments, activeProjectId, sessionId);
+      files = await uploadFilesForSession(fileAttachments, activeProjectSlug, sessionId);
     } catch (err) {
       setChatError(getErrorMessage(err, '附件上传失败。'));
       return;
@@ -599,7 +591,7 @@ export function ChatPage() {
     setForceCompress(false);
 
     await sendMessage(userText, {
-      projectId: activeProjectId,
+      projectSlug: activeProjectSlug,
       sessionId,
       agentId: runtimeAgent?.id,
       agentName: runtimeAgent?.name,
@@ -615,7 +607,7 @@ export function ChatPage() {
       images,
       files,
     });
-  }, [activeProjectId, activeSessionId, approvalMode, deepThinking, fileAttachments, forceCompress, forcedSkillIds, imageAttachments, inputValue, planMode, planModeEnabled, resetAttachments, resetScroll, runtimeAgent, selectedModelId, selectedModelSupportsImages, sendMessage, state.currentRunId, state.isStreaming, steer, targetMode, teamModeEnabled, uploadFilesForSession]);
+  }, [activeProjectSlug, activeSessionId, approvalMode, deepThinking, fileAttachments, forceCompress, forcedSkillIds, imageAttachments, inputValue, planMode, planModeEnabled, resetAttachments, resetScroll, runtimeAgent, selectedModelId, selectedModelSupportsImages, sendMessage, state.currentRunId, state.isStreaming, steer, targetMode, teamModeEnabled, uploadFilesForSession]);
 
   const handlePlanReview = useCallback(async (
     plan: PlanReviewData,
@@ -637,7 +629,7 @@ export function ChatPage() {
     resetScroll();
     setChatError(null);
     await sendMessage(userText, {
-      projectId: activeProjectId,
+      projectSlug: activeProjectSlug,
       sessionId: activeSessionId,
       agentId: runtimeAgent?.id,
       agentName: runtimeAgent?.name,
@@ -650,7 +642,7 @@ export function ChatPage() {
       planAction: action,
       planFeedback: feedback,
     });
-  }, [activeProjectId, activeSessionId, deepThinking, forcedSkillIds, resetScroll, runtimeAgent, selectedModelId, sendMessage, state.isStreaming]);
+  }, [activeProjectSlug, activeSessionId, deepThinking, forcedSkillIds, resetScroll, runtimeAgent, selectedModelId, sendMessage, state.isStreaming]);
 
   // 当流结束时，将 assistant 回复加入消息历史
   useEffect(() => {
@@ -709,13 +701,12 @@ export function ChatPage() {
       {historyPanelMounted && (
         <ChatHistoryPanel
           activeSessionId={activeSessionId}
-          allProjects={allProjects}
           collapsed={historyCollapsed}
           isMacDesktopShell={isMacDesktopShell}
           isStreaming={state.isStreaming}
           loading={sessionsLoading}
+          projectName={activeProject?.name || '默认项目'}
           sessions={chatOnlySessions}
-          workspaces={workspaces}
           onCollapse={handleCollapseHistory}
           onDeleteSession={(session) => { void handleDeleteSession(session); }}
           onNewSession={handleNewSession}
@@ -913,7 +904,7 @@ export function ChatPage() {
             approvalSelector={(
               <ApprovalModeControl
                 sessionId={activeSessionId}
-                projectId={activeProjectId}
+                projectSlug={activeProjectSlug}
                 mode={approvalMode}
                 disabled={state.isStreaming}
                 onChanged={(mode) => {
@@ -985,13 +976,13 @@ const APPROVAL_MODE_OPTIONS: Array<{
 
 function ApprovalModeControl({
   sessionId,
-  projectId,
+  projectSlug,
   mode,
   disabled,
   onChanged,
 }: {
   sessionId: string | null;
-  projectId: string;
+  projectSlug: string;
   mode: 'manual' | 'model_review' | 'full_access';
   disabled: boolean;
   onChanged: (mode: 'manual' | 'model_review' | 'full_access') => void;
@@ -1041,7 +1032,7 @@ function ApprovalModeControl({
       onChanged(next);
       return;
     }
-    const params = new URLSearchParams({ projectId });
+    const params = new URLSearchParams({ projectSlug });
     const response = await fetch(`/api/chat/sessions/${sessionId}/approval?${params.toString()}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },

@@ -77,10 +77,19 @@ export interface JobCapabilityContract {
   confirmedAt?: string | null;
 }
 
+export interface FrozenSkillRecord {
+  id: string;
+  name: string;
+  sourceScope: string;
+  sourcePath: string;
+  contentSha256: string;
+  frozenAt: string;
+  origin: string;
+}
+
 export interface ScheduledJob {
   id: string;
-  workspaceId: string;
-  projectId: string;
+  projectSlug: string;
   name: string;
   summary: string;
   status: JobStatus;
@@ -95,6 +104,7 @@ export interface ScheduledJob {
   lastRunAt: string | null;
   frozenPrompt: string;
   skillIds: string[];
+  requiredSkills: FrozenSkillRecord[];
   toolScope: JobToolScope;
   inputSpec: Record<string, unknown>;
   outputSpec: Record<string, unknown>;
@@ -135,8 +145,7 @@ export interface JobOutputManifest {
 export interface ScheduledJobRun {
   id: string;
   jobId: string;
-  workspaceId: string;
-  projectId: string;
+  projectSlug: string;
   trigger: FiringTrigger;
   scheduledFor: string;
   status: FiringStatus;

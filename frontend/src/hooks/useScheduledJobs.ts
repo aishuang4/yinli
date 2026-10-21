@@ -138,8 +138,7 @@ function mapToolScope(raw: unknown): JobToolScope {
 function mapJob(raw: Record<string, unknown>): ScheduledJob {
   return {
     id: String(raw.id ?? ''),
-    workspaceId: String(raw.workspaceId ?? ''),
-    projectId: String(raw.projectId ?? ''),
+    projectSlug: String(raw.projectSlug ?? ''),
     name: String(raw.name ?? ''),
     summary: String(raw.summary ?? ''),
     status: raw.status as ScheduledJob['status'],
@@ -156,6 +155,20 @@ function mapJob(raw: Record<string, unknown>): ScheduledJob {
     lastRunAt: raw.lastRunAt ? String(raw.lastRunAt) : null,
     frozenPrompt: String(raw.frozenPrompt ?? ''),
     skillIds: Array.isArray(raw.skillIds) ? raw.skillIds.map((item) => String(item)) : [],
+    requiredSkills: Array.isArray(raw.requiredSkills)
+      ? raw.requiredSkills.map((item) => {
+        const record = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+        return {
+          id: String(record.id ?? ''),
+          name: String(record.name ?? ''),
+          sourceScope: String(record.sourceScope ?? ''),
+          sourcePath: String(record.sourcePath ?? ''),
+          contentSha256: String(record.contentSha256 ?? ''),
+          frozenAt: String(record.frozenAt ?? ''),
+          origin: String(record.origin ?? ''),
+        };
+      })
+      : [],
     toolScope: mapToolScope(raw.toolScope),
     inputSpec: raw.inputSpec && typeof raw.inputSpec === 'object' ? raw.inputSpec as Record<string, unknown> : {},
     outputSpec: raw.outputSpec && typeof raw.outputSpec === 'object' ? raw.outputSpec as Record<string, unknown> : {},
@@ -189,8 +202,7 @@ function mapRun(raw: Record<string, unknown>): ScheduledJobRun {
   return {
     id: String(raw.id ?? ''),
     jobId: String(raw.jobId ?? ''),
-    workspaceId: String(raw.workspaceId ?? ''),
-    projectId: String(raw.projectId ?? ''),
+    projectSlug: String(raw.projectSlug ?? ''),
     trigger: (raw.trigger as ScheduledJobRun['trigger']) || 'schedule',
     scheduledFor: String(raw.scheduledFor ?? ''),
     status: raw.status as ScheduledJobRun['status'],
@@ -213,7 +225,7 @@ function readEnabledFlag(value: unknown): boolean | null {
 }
 
 export function useScheduledJobs(): UseScheduledJobsReturn {
-  const activeProjectId = useAppStore((state) => state.activeProjectId);
+  const activeProjectSlug = useAppStore((state) => state.activeProjectSlug);
   const [jobs, setJobs] = useState<ScheduledJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -233,7 +245,7 @@ export function useScheduledJobs(): UseScheduledJobsReturn {
       setLoading(true);
       setError(null);
       const params = new URLSearchParams();
-      if (activeProjectId) params.set('projectId', activeProjectId);
+      if (activeProjectSlug) params.set('projectSlug', activeProjectSlug);
       const query = params.toString();
       const payload = await requestJson<{ jobs: Record<string, unknown>[]; enabled?: unknown }>(
         `/api/scheduled-jobs${query ? `?${query}` : ''}`,
@@ -246,7 +258,7 @@ export function useScheduledJobs(): UseScheduledJobsReturn {
     } finally {
       setLoading(false);
     }
-  }, [activeProjectId]);
+  }, [activeProjectSlug]);
 
   const runWrite = useCallback(async (
     action: () => Promise<ScheduledJob>,

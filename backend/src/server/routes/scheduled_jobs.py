@@ -204,6 +204,18 @@ def serialize_job(job: ScheduledJob, *, source_path: str | None = None) -> dict[
         "lastRunAt": job.last_run_at,
         "frozenPrompt": job.frozen_prompt,
         "skillIds": job.skill_ids,
+        "requiredSkills": [
+            {
+                "id": str(item.get("id") or ""),
+                "name": str(item.get("name") or ""),
+                "sourceScope": str(item.get("source_scope") or item.get("sourceScope") or ""),
+                "sourcePath": str(item.get("source_path") or item.get("sourcePath") or ""),
+                "contentSha256": str(item.get("content_sha256") or item.get("contentSha256") or ""),
+                "frozenAt": str(item.get("frozen_at") or item.get("frozenAt") or ""),
+                "origin": str(item.get("origin") or ""),
+            }
+            for item in list(job.required_skills or [])
+        ],
         "toolScope": job.tool_scope.model_dump(),
         "inputSpec": job.input_spec,
         "outputSpec": job.output_spec,

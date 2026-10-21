@@ -546,6 +546,12 @@ def add_project_folder(slug: str, path: str, access_mode: str = "read") -> dict[
     return _project_record_store().add_folder(slug, path, access_mode)
 
 
+def remove_project_folder(slug: str, path: str) -> dict[str, Any] | None:
+    """移除非主目录授权。"""
+
+    return _project_record_store().remove_folder(slug, path)
+
+
 def delete_project(slug: str) -> bool:
     """删除非默认 Project。"""
 

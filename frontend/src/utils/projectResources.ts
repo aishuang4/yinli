@@ -1,19 +1,9 @@
-/** Project 资源 binding 写入辅助。 */
-
-import type { ProjectResourceType } from '../types/workspace';
+/** 资源不再按 Project 绑定。保留空函数，避免旧调用点打到已删除的接口。 */
 
 export async function bindProjectResource(
-  projectId: string,
-  resourceType: ProjectResourceType,
-  resourceId: string,
+  _projectSlug: string,
+  _resourceType: string,
+  _resourceId: string,
 ): Promise<void> {
-  const response = await fetch(
-    `/api/projects/${encodeURIComponent(projectId)}/resources/${resourceType}/${encodeURIComponent(resourceId)}`,
-    {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled: true }),
-    },
-  );
-  if (!response.ok) throw new Error(`Project 资源绑定失败：HTTP ${response.status}`);
+  return undefined;
 }
