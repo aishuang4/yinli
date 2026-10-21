@@ -1,7 +1,7 @@
 """定时 firing 与 Chat Run 的领域桥接。
 
 调度器必须走本模块，禁止直接 await start_chat_run()。
-执行面经 build_scheduled_run_context 裁剪无人值守工具。
+执行面经 build_run_context(mode="frozen") 裁剪无人值守工具。
 """
 
 from __future__ import annotations
@@ -135,7 +135,12 @@ async def _start_scheduled_chat_run(req: ScheduledRunRequest) -> str:
     _validate_request(req)
     from src.config.runtime_settings import resolve_model_binding
     binding = resolve_model_binding(req.model_config_id)
-    session_id = f"sched-{uuid.uuid4().hex}"
+    job = _job_view(req)
+    policy = str(getattr(job, "context_policy", "fresh") or "fresh")
+    owner_session = str(getattr(job, "created_from_session_id", "") or "")
+    # fresh 每次新建 scheduled_job 会话，避免把聊天历史带进任务。
+    # 非 fresh 才把 Run 挂到创建任务的 owner session。
+    session_id = owner_session if policy != "fresh" and owner_session else uuid.uuid4().hex
     runtime_context = resolve_runtime_context(
         project_slug=req.project_slug,
         session_id=session_id,
@@ -186,6 +191,9 @@ def _job_view(req: ScheduledRunRequest) -> SimpleNamespace:
             agent_id=req.agent_id,
             frozen_prompt=req.frozen_prompt,
             skill_ids=list(req.skill_ids),
+            required_skills=[],
+            context_policy="fresh",
+            created_from_session_id="",
             tool_scope=req.tool_scope,
             capability_contract=None,
             project_slug=req.project_slug,
@@ -229,6 +237,11 @@ def _write_frozen_spec(workspace_dir: Path, req: ScheduledRunRequest) -> None:
         "scheduledFor": req.scheduled_for,
         "trigger": req.trigger,
         "skillIds": list(req.skill_ids),
+        "requiredSkills": [
+            str(item.get("id") or "")
+            for item in list(getattr(_job_view(req), "required_skills", None) or [])
+            if str(item.get("id") or "")
+        ],
         "toolScope": {
             "allowBash": req.tool_scope.allow_bash,
             "allowHttp": req.tool_scope.allow_http,

@@ -91,6 +91,12 @@ _TOOL_SCOPE_FLAGS = frozenset({
 })
 
 
+def _skill_manifest_pause_codes() -> frozenset[str]:
+    from src.runtime.capabilities import SKILL_HASH_CODES
+
+    return SKILL_HASH_CODES | {"skill_unbound"}
+
+
 class ScheduledJobService:
     """Job 控制面唯一状态迁移入口。"""
 
@@ -301,10 +307,20 @@ class ScheduledJobService:
             timezone_name=job.timezone,
             after=now or datetime.now(timezone.utc),
         )
+        frozen_records: list[dict[str, Any]] = []
+        if job.mode != "script":
+            from src.runtime.capabilities import SkillManifestError, freeze_job_skills
+
+            try:
+                frozen_records = freeze_job_skills(job)
+            except SkillManifestError as exc:
+                raise ScheduledJobStateError(str(exc)) from exc
         changes: dict[str, Any] = {
             "status": "active",
             "pause_reason": "",
             "next_run_at": to_utc_iso(next_run),
+            "required_skills": frozen_records,
+            "context_policy": "fresh",
             **contract_changes,
         }
         return self._save_job(job_id, changes, persist_file=persist_file)
@@ -751,7 +767,10 @@ class ScheduledJobService:
         job = self.get_job(firing.job_id)
         stamped_now = now or datetime.now(timezone.utc)
         already_terminal = firing.status in TERMINAL_FIRING_STATUSES
-        pending = firing if already_terminal else firing.model_copy(update={"status": status})
+        pending = firing if already_terminal else firing.model_copy(update={
+            "status": status,
+            "error_code": error_code,
+        })
         try:
             clock_changes = self._clock_updates(job, pending, now=stamped_now)
         except ScheduleError as exc:
@@ -768,6 +787,9 @@ class ScheduledJobService:
             "completed_at": to_utc_iso(stamped_now),
         }
         job_changes = dict(clock_changes)
+        if status == "failed" and error_code in _skill_manifest_pause_codes():
+            job_changes["status"] = "paused"
+            job_changes["pause_reason"] = error_code
         if status == "succeeded":
             job_changes["consecutive_successes"] = job.consecutive_successes + 1
             job_changes["consecutive_failures"] = 0

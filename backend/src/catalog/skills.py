@@ -95,8 +95,8 @@ def _discovered_from_package(
     description = str(metadata.get("description") or "").strip()
     if not name or not description:
         return None
-    content_hash = hashlib.sha256(markdown.encode("utf-8")).hexdigest()[:16]
-    skill_id = stable_id or f"external-{content_hash}"
+    content_hash = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
+    skill_id = stable_id or f"external-{content_hash[:16]}"
     return DiscoveredSkill(
         id=skill_id,
         name=name,

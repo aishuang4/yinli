@@ -6,7 +6,7 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from src.config.runtime_settings import get_effective_model_settings
 from src.project_files import list_project_session_artifacts, project_session_directory
@@ -217,6 +217,34 @@ def _require_job_approval_mode(job: object) -> str:
     return mode
 
 
+async def build_run_context(
+    run_data: ChatMessage,
+    runtime_context: RuntimeContext,
+    *,
+    mode: Literal["interactive", "frozen"] = "interactive",
+    job: Any | None = None,
+    firing: Any | None = None,
+    session_workspace_dir: str | None = None,
+) -> ChatRunContext:
+    """交互式與定時 firing 共用入口。frozen 只讀確認時寫下的 Skill 記錄。"""
+
+    if mode == "frozen":
+        if job is None or firing is None:
+            raise ValueError("frozen 模式需要 job 與 firing")
+        return await build_scheduled_run_context(
+            job,
+            firing,
+            run_data=run_data,
+            runtime_context=runtime_context,
+            session_workspace_dir=session_workspace_dir,
+        )
+    return await build_chat_run_context(
+        run_data,
+        runtime_context,
+        session_workspace_dir=session_workspace_dir,
+    )
+
+
 async def build_chat_run_context(
     run_data: ChatMessage,
     runtime_context: RuntimeContext,
@@ -300,6 +328,14 @@ async def build_chat_run_context(
         external_skills=external_skills,
     )
     used_skills = _merge_forced_skills(used_skills, forced_skills)
+    from src.runtime.capabilities import resolve_capabilities
+
+    used_skills = list(resolve_capabilities(
+        mode="interactive",
+        agent=agent_config,
+        requested_skill_ids=[str(getattr(skill, "id", "") or "") for skill in forced_skills],
+        candidates=used_skills,
+    ).skills)
     skill_paths = resolve_runtime_skill_paths(used_skills, runtime_context=runtime_context)
     used_skill_details = list_skill_usage_details(used_skills)
     skill_runs: list[ChatSkillRun] = []
@@ -423,7 +459,7 @@ async def build_scheduled_run_context(
     """组装无人值守 firing 的 ChatRunContext。
 
     不调用模型 Readiness / intent，不跑 tool_scope_resolver。
-    冻结 Skill 必须全量命中，否则 skill_unbound。
+    只认 required_skills 冻结记录；校验失败不回退 skill_ids。
     """
 
     frozen_prompt = str(getattr(job, "frozen_prompt", "") or run_data.message or "").strip()
@@ -444,12 +480,17 @@ async def build_scheduled_run_context(
     project_resources.require_agent(agent_id)
     agent_name = run_data.agent_name or (agent_config.name if agent_config else "Assistant")
     base_system_prompt = resolve_agent_system_prompt(agent_config, run_data)
-    frozen_skill_ids = [str(item) for item in list(getattr(job, "skill_ids", None) or run_data.skill_ids or [])]
-    used_skills = _resolve_frozen_runtime_skills(
-        frozen_skill_ids,
-        agent_config=agent_config,
-        project_resources=project_resources,
-    )
+    frozen_records = list(getattr(job, "required_skills", None) or [])
+    from src.runtime.capabilities import SkillManifestError, resolve_capabilities
+
+    try:
+        used_skills = list(resolve_capabilities(
+            mode="frozen",
+            agent=agent_config,
+            frozen=frozen_records,
+        ).skills)
+    except SkillManifestError as exc:
+        raise ValueError(str(exc)) from exc
     runtime_model_settings = get_effective_model_settings()
     runtime_model_config = build_runtime_model_config(
         run_data=run_data,
@@ -502,6 +543,9 @@ async def build_scheduled_run_context(
             _build_project_context_prompt(runtime_context),
             _build_job_workspace_prompt(workspace_dir),
             _build_runtime_context_prompt(),
+            _build_skill_context_prompt() if used_skills else "",
+            _frozen_skill_prompt(used_skills),
+            _previous_result_prompt(job),
             memory_prompt,
             _build_final_answer_system_prompt(),
         ]
@@ -563,34 +607,32 @@ async def build_scheduled_run_context(
     )
 
 
-def _resolve_frozen_runtime_skills(
-    skill_ids: list[str],
-    *,
-    agent_config: Any | None,
-    project_resources: ProjectResourceAccess,
-) -> list[Skill]:
-    """冻结 skill_ids 必须全部仍安装且仍绑定 Agent。不再查 Project binding。"""
+def _frozen_skill_prompt(skills: list[Any]) -> str:
+    """把凍結 Skill 的 id 寫進本輪上下文，供 firing trace 與模型看到同一份列表。"""
 
-    del project_resources
-    frozen = [str(skill_id) for skill_id in skill_ids if str(skill_id).strip()]
-    if not frozen:
-        return []
-    agent_skill_ids = list(getattr(agent_config, "skills", None) or [])
-    missing: list[str] = []
-    used: list[Skill] = []
-    for skill_id in frozen:
-        skill = get_installed_skill(skill_id)
-        if skill is None or not bool(getattr(skill, "enabled", True)):
-            missing.append(skill_id)
-            continue
-        if skill_id not in agent_skill_ids:
-            missing.append(skill_id)
-            continue
-        used.append(skill)
-    if missing or [skill.id for skill in used] != frozen:
-        unique = list(dict.fromkeys(missing or frozen))
-        raise ValueError(f"skill_unbound: {', '.join(unique)}")
-    return used
+    if not skills:
+        return ""
+    lines = ["## Frozen Skills"]
+    for skill in skills:
+        lines.append(f"- {getattr(skill, 'id', '')}: {getattr(skill, 'name', '')}")
+    return "\n".join(lines)
+
+
+def _previous_result_prompt(job: Any) -> str:
+    """context_policy=fresh 不帶上一次結果；其他策略才讀 owner session 的最近回答。"""
+
+    if str(getattr(job, "context_policy", "fresh") or "fresh") == "fresh":
+        return ""
+    session_id = str(getattr(job, "created_from_session_id", "") or "")
+    if not session_id:
+        return ""
+    from src.storage.database import get_latest_assistant_chat_message
+
+    record = get_latest_assistant_chat_message(session_id)
+    text = str((record or {}).get("content") or "").strip()
+    if not text:
+        return ""
+    return f"## Previous Result\n{text[:4000]}"
 
 
 MAX_FORCED_SKILLS = 3

@@ -131,7 +131,14 @@ async def emit_start_events(ctx: ChatRunContext, run_data) -> AsyncGenerator[str
             f"runtimeSkills={len(ctx.used_skills)}; "
             f"tools={ctx.runtime_tool_scope.cache_key()}"
         ),
-        payload=route_trace_payload(ctx.intent_route),
+        payload={
+            **route_trace_payload(ctx.intent_route),
+            "runtimeSkillIds": [
+                str(getattr(skill, "id", "") or "")
+                for skill in ctx.used_skills
+                if str(getattr(skill, "id", "") or "")
+            ],
+        },
     )
     _record_workspace_event(
         session_id=ctx.session_id,

@@ -24,7 +24,7 @@ from src.runtime_context import resolve_runtime_context
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.router import router
 from src.server.routes.chat.run_context import (
-    build_chat_run_context,
+    build_run_context,
     resolve_forced_runtime_skills,
 )
 from src.server.routes.skills import discover_external_skills
@@ -147,9 +147,10 @@ async def start_chat_run(data: ChatMessage):
         """
         生成进程内结构化源流；SSE 只在最终 Projection Stream 边界序列化。
         """
-        ctx = await build_chat_run_context(
+        ctx = await build_run_context(
             run_data,
             runtime_context.with_run_id(current_chat_background_run_id()),
+            mode="interactive",
         )
         persist_user_message_and_trace(ctx, run_data)
         if ctx.trigger_source != "scheduled_job":

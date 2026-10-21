@@ -471,7 +471,7 @@ def refresh_skill_package(skill: Skill) -> Skill:
         "trigger": trigger,
         "content": markdown.strip(),
         "resources": resources,
-        "content_hash": hashlib.sha256(markdown.encode("utf-8")).hexdigest()[:16],
+        "content_hash": hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
         "updated_at": updated_at,
     })
 

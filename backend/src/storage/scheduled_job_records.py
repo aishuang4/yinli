@@ -19,6 +19,7 @@ _DEFAULT_TOOL_SCOPE = {
 _JOB_JSON_FIELDS = {
     "schedule_expr",
     "skill_ids",
+    "required_skills",
     "tool_scope",
     "capability_contract",
     "input_spec",
@@ -28,7 +29,8 @@ _JOB_JSON_FIELDS = {
 _JOB_UPDATE_FIELDS = (
     "project_slug", "cwd", "name", "summary", "status", "pause_reason",
     "agent_id", "mode", "schedule_kind", "schedule_expr", "timezone", "model_config_id",
-    "next_run_at", "last_run_at", "frozen_prompt", "skill_ids", "tool_scope",
+    "next_run_at", "last_run_at", "frozen_prompt", "skill_ids", "required_skills",
+    "context_policy", "tool_scope",
     "capability_contract",
     "input_spec", "output_spec", "missed_policy", "failure_policy",
     "delivery_policy", "delivery_channel_ref", "recipient_ids",
@@ -378,6 +380,7 @@ class ScheduledJobRecordStore:
             if field not in changes:
                 continue
             value = merged.get(field)
+            column = "required_skills_json" if field == "required_skills" else field
             if field in _JOB_JSON_FIELDS:
                 if field == "tool_scope" and not value:
                     value = dict(_DEFAULT_TOOL_SCOPE)
@@ -385,10 +388,10 @@ class ScheduledJobRecordStore:
                     value = {}
                 elif hasattr(value, "to_storage_dict"):
                     value = value.to_storage_dict()
-                assignments.append(f"{field}=?")
+                assignments.append(f"{column}=?")
                 params.append(self.dumps(value if value is not None else _json_default(field)))
             else:
-                assignments.append(f"{field}=?")
+                assignments.append(f"{column}=?")
                 params.append(value)
         params.append(current["id"])
         return (
@@ -622,6 +625,8 @@ class ScheduledJobRecordStore:
             "last_run_at": row["last_run_at"],
             "frozen_prompt": row["frozen_prompt"],
             "skill_ids": self.loads(row["skill_ids"], []),
+            "required_skills": self.loads(row["required_skills_json"], []) if "required_skills_json" in row.keys() else [],
+            "context_policy": row["context_policy"] if "context_policy" in row.keys() and row["context_policy"] else "fresh",
             "tool_scope": tool_scope,
             "capability_contract": _contract_from_row(row, self.loads),
             "input_spec": self.loads(row["input_spec"], {}),
@@ -706,7 +711,7 @@ def _contract_from_row(row: sqlite3.Row, loads: Callable[[str | None, Any], Any]
 
 
 def _json_default(field: str) -> Any:
-    if field in {"skill_ids", "recipient_ids"}:
+    if field in {"skill_ids", "recipient_ids", "required_skills"}:
         return []
     if field == "tool_scope":
         return dict(_DEFAULT_TOOL_SCOPE)

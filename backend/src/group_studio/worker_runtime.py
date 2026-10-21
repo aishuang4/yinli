@@ -257,9 +257,16 @@ def _skill_paths(skill_ids: list[str]) -> list[str]:
         skills = []
         for skill_id in skill_ids:
             item = get_installed_skill(skill_id)
-            if item is not None:
+            if item is not None and bool(getattr(item, "enabled", True)):
                 skills.append(item)
-        return list(resolve_runtime_skill_paths(skills) or [])
+        from src.runtime.capabilities import resolve_capabilities
+
+        resolved = resolve_capabilities(
+            mode="interactive",
+            requested_skill_ids=skill_ids,
+            candidates=skills,
+        )
+        return list(resolve_runtime_skill_paths(list(resolved.skills)) or [])
     except Exception:
         return []
 

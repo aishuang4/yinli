@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -465,23 +466,21 @@ def test_build_scheduled_run_context_skips_model_readiness_and_tool_scope_resolv
     assert ctx.readiness.source == "scheduled_job"
 
 
-def test_frozen_skills_must_equal_used_skills_or_skill_unbound(isolated_db, tmp_path, monkeypatch):
+def test_frozen_record_loads_skill_and_hash_change_stops_the_run(isolated_db, tmp_path, monkeypatch):
     project = _prepare_project(tmp_path)
-    installed = {
-        "skill-ok": Skill.model_validate({
-            "id": "skill-ok",
-            "name": "ok",
-            "description": "",
-            "category": "test",
-            "status": "installed",
-            "enabled": True,
-            "updatedAt": "2026-08-21T00:00:00+00:00",
-        }),
-    }
-    monkeypatch.setattr(
-        "src.server.routes.chat.run_context.get_installed_skill",
-        lambda skill_id: installed.get(skill_id),
-    )
+    skill_md = tmp_path / "skill-ok" / "SKILL.md"
+    skill_md.parent.mkdir()
+    skill_md.write_text("原始步骤\n", encoding="utf-8")
+    digest = hashlib.sha256(skill_md.read_bytes()).hexdigest()
+    frozen = [{
+        "id": "skill-ok",
+        "name": "ok",
+        "source_scope": "project",
+        "source_path": str(skill_md),
+        "content_sha256": digest,
+        "frozen_at": "2026-10-21T00:00:00+00:00",
+        "origin": "explicit",
+    }]
     monkeypatch.setattr(
         "src.server.routes.chat.run_context.get_effective_model_settings",
         lambda: SimpleNamespace(default_model="model", fallback_models=[], provider="deepseek", api_key="x"),
@@ -515,16 +514,32 @@ def test_frozen_skills_must_equal_used_skills_or_skill_unbound(isolated_db, tmp_
         run_id="run-skill",
         agent_id="default",
     )
-    with pytest.raises(ValueError, match="skill_unbound"):
+    ctx = asyncio.run(build_scheduled_run_context(
+        _job_ns(id="job-skill", required_skills=frozen, context_policy="fresh"),
+        _firing_ns(id="firing-skill", job_id="job-skill"),
+        run_data=ChatMessage(
+            session_id="sched-skill",
+            project_slug=project["slug"],
+            message="使用技能",
+            agent_id="default",
+            skill_ids=[],
+        ),
+        runtime_context=runtime_context,
+        session_workspace_dir=str(workspace),
+    ))
+    assert [skill.id for skill in ctx.used_skills] == ["skill-ok"]
+    assert "skill-ok" in ctx.system_prompt
+    skill_md.write_text("改过的步骤\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="skill_hash_changed"):
         asyncio.run(build_scheduled_run_context(
-            _job_ns(id="job-skill", skill_ids=["skill-ok", "skill-missing"]),
+            _job_ns(id="job-skill", required_skills=frozen, context_policy="fresh"),
             _firing_ns(id="firing-skill", job_id="job-skill"),
             run_data=ChatMessage(
                 session_id="sched-skill",
                 project_slug=project["slug"],
                 message="使用技能",
                 agent_id="default",
-                skill_ids=["skill-ok", "skill-missing"],
+                skill_ids=[],
             ),
             runtime_context=runtime_context,
             session_workspace_dir=str(workspace),

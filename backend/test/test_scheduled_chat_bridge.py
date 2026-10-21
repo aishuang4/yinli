@@ -149,8 +149,8 @@ def _patch_fake_agent(monkeypatch, execute, *, filesystem_scope: str):
     )
     passed: dict[str, str | None] = {"session_workspace_dir": None}
 
-    async def fake_build(job, firing, *, run_data, runtime_context, session_workspace_dir=None):
-        _ = job, firing
+    async def fake_build(run_data, runtime_context, *, mode="interactive", job=None, firing=None, session_workspace_dir=None):
+        _ = mode, job, firing
         passed["session_workspace_dir"] = session_workspace_dir
         ctx = _fake_context(run_data, runtime_context)
         if session_workspace_dir:
@@ -160,7 +160,7 @@ def _patch_fake_agent(monkeypatch, execute, *, filesystem_scope: str):
         return ctx
 
     monkeypatch.setattr("src.scheduler.chat_bridge.get_registered_agent", lambda agent_id: agent)
-    monkeypatch.setattr("src.server.routes.chat.scheduled_launch.build_scheduled_run_context", fake_build)
+    monkeypatch.setattr("src.server.routes.chat.scheduled_launch.build_run_context", fake_build)
     monkeypatch.setattr("src.server.routes.chat.scheduled_launch.execute_chat_runtime", execute)
     monkeypatch.setattr("src.server.routes.chat.scheduled_launch.get_startup_error", lambda ctx, data: None)
     monkeypatch.setattr(
@@ -295,7 +295,7 @@ def test_start_scheduled_chat_run_returns_id_and_persists_columns(isolated_db, t
         return live.session_id
 
     session_id = asyncio.run(run_case())
-    assert session_id.startswith("sched-")
+    assert session_id and not session_id.startswith("sched-")
 
 
 def test_each_firing_creates_a_new_scheduled_session(isolated_db, tmp_path, monkeypatch):

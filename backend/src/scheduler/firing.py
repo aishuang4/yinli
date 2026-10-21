@@ -290,8 +290,17 @@ def _assistant_result_text(session_id: str) -> str:
     return str((record or {}).get("content") or "").strip()
 
 
+def _skill_pause_codes() -> frozenset[str]:
+    from src.runtime.capabilities import SKILL_HASH_CODES
+
+    return SKILL_HASH_CODES | {"skill_unbound"}
+
+
 def _launch_error_code(exc: ScheduledChatLaunchError) -> str:
     text = str(exc)
+    for code in sorted(_skill_pause_codes(), key=len, reverse=True):
+        if code in text:
+            return code
     lowered = text.lower()
     if "skill" in lowered:
         return "skill_unbound"
