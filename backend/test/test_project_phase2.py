@@ -1,6 +1,6 @@
 """阶段 2：Project slug、默认项目和旧库封存。"""
-
 from __future__ import annotations
+
 
 import asyncio
 import sqlite3
@@ -8,16 +8,18 @@ from pathlib import Path
 
 import pytest
 
-from src.storage.database import (
-    create_project,
-    ensure_db,
+from src.storage.engine.database import ensure_db
+from src.storage.records.chat_session_records import (
     get_chat_session,
-    get_project,
     list_chat_messages,
+)
+from src.storage.records.project_records import (
+    create_project,
+    get_project,
     list_projects,
 )
-from src.storage.legacy_archive import archive_legacy_layout
-from src.storage.project_records import ProjectNameError, slugify_project_name
+from src.storage.engine.legacy_archive import archive_legacy_layout
+from src.storage.records.project_records import ProjectNameError, slugify_project_name
 
 
 def test_fresh_tenant_gets_default_project():

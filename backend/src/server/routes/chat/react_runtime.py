@@ -32,7 +32,7 @@ from src.server.routes.chat.skill_context_middleware import (
     restore_activated_skills,
 )
 from src.server.routes.chat.steer_middleware import RunSteerMiddleware
-from src.storage.database import list_recent_skill_run_names
+from src.storage.records.skill_run_records import list_recent_skill_run_names
 from src.server.routes.chat.plan_mode.tools import build_plan_mode_tools
 from src.server.routes.chat.runtime import _build_user_content, _guardrail_cache_key
 from src.server.routes.chat.run_context import ChatRunContext

@@ -30,7 +30,8 @@ from src.agents.openai_message_formatter import (
     UserNameOnlyMoonshotFormatter,
     UserNameOnlyOpenAIFormatter,
 )
-from src.agents.runtime_types import AgentModelOptions, FallbackEventCallback
+from src.agents.model_options import AgentModelOptions, FallbackEventCallback
+from src.config.model_catalog import assert_model_urls_public
 from src.config.runtime_settings import ResolvedModel, binding_for_model
 
 
@@ -261,7 +262,7 @@ def create_model_chain(
     """Create a primary + fallback chain as one AgentScope-compatible model."""
 
     chain = resolved_models or binding_for_model(model_names[0] if model_names else None).chain
-    _assert_public_model_urls(chain)
+    assert_model_urls_public(item.base_url for item in chain)
     models = [
         create_model(
             item.default_model,
@@ -275,20 +276,3 @@ def create_model_chain(
     if len(models) == 1:
         return models[0]
     return FallbackChainModel(models, on_event=on_fallback_event)
-
-
-def _assert_public_model_urls(chain: tuple[ResolvedModel, ...]) -> None:
-    """调用前再查一次地址，挡住保存之后才解析到内网的域名。"""
-
-    from src.config.model_catalog import CatalogError
-    from src.security.egress import EgressBlocked, assert_public_url_sync, egress_enforced
-
-    if not egress_enforced():
-        return
-    for item in chain:
-        if not item.base_url.strip():
-            continue
-        try:
-            assert_public_url_sync(item.base_url, purpose="model")
-        except EgressBlocked as exc:
-            raise CatalogError("模型地址不能指向内网或本机") from exc

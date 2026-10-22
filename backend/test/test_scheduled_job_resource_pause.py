@@ -1,6 +1,6 @@
 """Project / Agent / Skill 资源变更时立即暂停 Job。"""
-
 from __future__ import annotations
+
 
 import asyncio
 from datetime import datetime, timezone
@@ -9,6 +9,7 @@ import pytest
 
 from fastapi import HTTPException
 
+from src.catalog.loader import delete_agent
 from src.scheduler.models import ScheduledJobStateError
 from src.scheduler.service import ScheduledJobService
 from src.scheduler.settings import set_scheduled_jobs_enabled
@@ -18,18 +19,22 @@ from src.server.routes import skills as skills_routes
 from src.server.routes import tools as tools_routes
 from src.server.routes.scheduled_jobs import confirm_scheduled_job
 from src.server.routes.projects import archive_project_record
-from src.storage import database
-from src.storage.database import (
+from src.storage.engine import database
+from src.skills.registry import write_skill_packages
+from src.storage.engine.database import (
     DEFAULT_PROJECT_ID,
-    create_project,
-    delete_agent,
     ensure_db,
-    list_user_notifications,
+)
+from src.catalog.loader import (
+    delete_agent,
+    import_sqlite_agent_record,
+)
+from src.storage.records.project_records import create_project
+from src.storage.records.resource_catalog_records import (
     replace_mcp_servers,
-    replace_skills,
-    upsert_agent,
     upsert_http_tool,
 )
+from src.storage.records.scheduled_job_records import list_user_notifications
 
 
 @pytest.fixture()
@@ -47,7 +52,7 @@ def _service() -> ScheduledJobService:
 
 
 def _ensure_agent(agent_id: str) -> None:
-    upsert_agent({
+    import_sqlite_agent_record({
         "id": agent_id,
         "name": agent_id,
         "system_prompt": "prompt",
@@ -56,7 +61,7 @@ def _ensure_agent(agent_id: str) -> None:
 
 
 def _ensure_skill(skill_id: str) -> None:
-    replace_skills({
+    write_skill_packages({
         skill_id: {
             "id": skill_id,
             "name": skill_id,

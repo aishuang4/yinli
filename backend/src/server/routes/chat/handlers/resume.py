@@ -56,7 +56,10 @@ from src.server.routes.chat.trace_recorder import (
     _record_permission_decision,
     _record_run_event,
 )
-from src.storage.database import update_subagent_invocation, update_subagent_invocation_delivery
+from src.storage.records.trace_records import (
+    update_subagent_invocation,
+    update_subagent_invocation_delivery,
+)
 from src.subagents.task_store import SubagentTaskStore
 
 

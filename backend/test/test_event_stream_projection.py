@@ -30,7 +30,7 @@ from src.server.routes.chat.projection.projection_writer import (
 from src.server.routes.chat.projection.stream_service import ProjectionStreamService
 from src.server.routes.chat.projection.source_normalizer import ChatProjectionNormalizer
 from src.server.routes.chat.team_runtime.store import TeamEventPublisher, TeamStore
-from src.storage import database
+from src.storage.engine import database
 
 
 @pytest.fixture()

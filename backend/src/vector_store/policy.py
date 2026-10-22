@@ -3,8 +3,8 @@
 `VECTOR_STORE_PROVIDER` 只在首次初始化时生效；一旦策略写入 SQLite，后续启动必须读取
 持久化策略，避免环境变量静默改变底层 provider 或 collection 结构。
 """
-
 from __future__ import annotations
+
 
 import os
 from dataclasses import asdict, dataclass
@@ -13,7 +13,11 @@ from typing import Any
 
 from dotenv import dotenv_values
 
-from src.storage.database import BACKEND_ROOT, get_json_record, upsert_json_record
+from src.storage.engine.database import BACKEND_ROOT
+from src.storage.config.json_document_store import (
+    get_json_record,
+    upsert_json_record,
+)
 
 VECTOR_STORE_NAMESPACE = "vector_store"
 VECTOR_STORE_POLICY_KEY = "policy"

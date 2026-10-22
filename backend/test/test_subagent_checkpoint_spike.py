@@ -5,6 +5,12 @@ Pydantic 模型。这里验证当前版本的精确恢复边界：用相同 runt
 Agent 并恢复 AgentState 后，ASKING 和 SUBMITTED 两种暂停状态都能继续。
 """
 
+from src.storage.records.trace_records import list_subagent_transcript_items
+from src.storage.records.trace_records import append_subagent_transcript_item
+from src.storage.records.trace_records import reconcile_interrupted_subagent_invocations
+from src.storage.records.trace_records import get_subagent_invocation
+from src.storage.records.trace_records import create_subagent_invocation
+
 import asyncio
 
 from agentscope.agent import Agent
@@ -22,7 +28,7 @@ from agentscope.permission import PermissionContext, PermissionDecision, Permiss
 from agentscope.state import AgentState
 from agentscope.tool import ToolBase, ToolChunk, Toolkit
 
-from src.storage import database
+from src.storage.engine import database
 from src.subagents.task_service import InvalidSubagentTaskTransition, SubagentTaskService
 from src.subagents.supervisor import SubagentSupervisor
 
@@ -176,7 +182,7 @@ def test_task_service_rejects_terminal_state_regression(tmp_path, monkeypatch) -
     else:
         raise AssertionError("Terminal task must not transition back to running.")
 
-    assert database.get_subagent_invocation(task["id"])["status"] == "completed"
+    assert get_subagent_invocation(task["id"])["status"] == "completed"
 
 
 def test_supervisor_limits_concurrency_and_cleans_completed_handles() -> None:
@@ -244,18 +250,18 @@ def test_supervisor_cancellation_reaches_running_operation() -> None:
 def test_subagent_transcript_query_respects_invocation_identity(tmp_path, monkeypatch) -> None:
     """Task detail 查询必须按 invocation identity 返回对应 transcript。"""
 
-    first = database.create_subagent_invocation({
+    first = create_subagent_invocation({
         "id": "subagent-one", "session_id": "session-1", "parent_agent_id": "agent-1",
         "parent_agent_name": "Agent", "subagent_name": "reviewer", "task": "One.",
     })
-    second = database.create_subagent_invocation({
+    second = create_subagent_invocation({
         "id": "subagent-two", "session_id": "session-1", "parent_agent_id": "agent-1",
         "parent_agent_name": "Agent", "subagent_name": "reviewer", "task": "Two.",
     })
-    database.append_subagent_transcript_item(invocation_id=first["id"], kind="one", payload={})
-    database.append_subagent_transcript_item(invocation_id=second["id"], kind="two", payload={})
+    append_subagent_transcript_item(invocation_id=first["id"], kind="one", payload={})
+    append_subagent_transcript_item(invocation_id=second["id"], kind="two", payload={})
 
-    assert [item["kind"] for item in database.list_subagent_transcript_items(first["id"])] == ["one"]
+    assert [item["kind"] for item in list_subagent_transcript_items(first["id"])] == ["one"]
 
 
 def test_startup_reconciliation_interrupts_running_but_preserves_waiting(tmp_path, monkeypatch) -> None:
@@ -265,9 +271,9 @@ def test_startup_reconciliation_interrupts_running_but_preserves_waiting(tmp_pat
         "session_id": "session-1", "parent_agent_id": "agent-1", "parent_agent_name": "Agent",
         "subagent_name": "reviewer", "task": "Review.",
     }
-    running = database.create_subagent_invocation({"id": "running", "status": "running", **common})
-    waiting = database.create_subagent_invocation({"id": "waiting", "status": "waiting", **common})
+    running = create_subagent_invocation({"id": "running", "status": "running", **common})
+    waiting = create_subagent_invocation({"id": "waiting", "status": "waiting", **common})
 
-    assert database.reconcile_interrupted_subagent_invocations() == 1
-    assert database.get_subagent_invocation(running["id"])["status"] == "interrupted"
-    assert database.get_subagent_invocation(waiting["id"])["status"] == "waiting"
+    assert reconcile_interrupted_subagent_invocations() == 1
+    assert get_subagent_invocation(running["id"])["status"] == "interrupted"
+    assert get_subagent_invocation(waiting["id"])["status"] == "waiting"

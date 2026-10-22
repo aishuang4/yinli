@@ -1,11 +1,14 @@
 """定时任务运行时开关。开发库默认关闭；桌面安装版首次启动写入打开。"""
-
 from __future__ import annotations
+
 
 from typing import Any
 
 from src.config.runtime_settings import SYSTEM_SETTINGS_NAMESPACE
-from src.storage.database import get_json_record, upsert_json_record
+from src.storage.config.json_document_store import (
+    get_json_record,
+    upsert_json_record,
+)
 
 SCHEDULED_JOBS_SETTINGS_KEY = "scheduled_jobs"
 

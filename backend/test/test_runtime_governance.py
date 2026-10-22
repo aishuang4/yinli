@@ -1,6 +1,6 @@
 """各 Runtime 共用治理组件。"""
-
 from __future__ import annotations
+
 
 import asyncio
 from types import SimpleNamespace
@@ -10,7 +10,7 @@ from agentscope.state import AgentState
 
 from src.server.routes.chat import runtime_governance as governance
 from src.server.routes.chat.context_middleware import COMPRESSION_KEY
-from src.storage import database
+from src.storage.engine import database
 
 
 @pytest.fixture()
@@ -58,7 +58,7 @@ def test_observe_model_call_writes_context_usage_and_compression_traces(isolated
     def fake_record(**kwargs):
         recorded.append(kwargs)
 
-    monkeypatch.setattr("src.runtime.governance._record_run_event", fake_record)
+    monkeypatch.setattr("src.runtime.model_call_trace._record_run_event", fake_record)
     # record_context_compression_events 在 trace_recorder 内部用自己的 _record_run_event，这里也拦下来
     monkeypatch.setattr("src.server.routes.chat.trace_recorder._record_run_event", fake_record)
 

@@ -2,8 +2,8 @@
 
 群聊升级会话时走这里，不要 import store._load_store。
 """
-
 from __future__ import annotations
+
 
 from src.server.routes.chat.lifecycle import ACTIVE_RUN_STATUSES
 from src.server.routes.chat.models import ChatSession
@@ -13,7 +13,7 @@ from src.server.routes.chat.store import (
     ensure_scheduled_job_session,
 )
 from src.server.routes.chat.store import session_model
-from src.storage.database import get_chat_session
+from src.storage.records.chat_session_records import get_chat_session
 
 __all__ = [
     "ACTIVE_RUN_STATUSES",

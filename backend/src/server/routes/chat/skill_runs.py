@@ -1,11 +1,15 @@
 """SkillRun lifecycle helpers for multi-turn Skills."""
-
 from __future__ import annotations
+
 
 from typing import Any
 
 from src.server.routes.skills import Skill, get_installed_skill
-from src.storage.database import get_active_skill_run, get_skill_run_by_pending_interaction, upsert_skill_run
+from src.storage.records.skill_run_records import (
+    get_active_skill_run,
+    get_skill_run_by_pending_interaction,
+    upsert_skill_run,
+)
 
 
 ACTIVE_STATUSES = {"active", "waiting_user"}

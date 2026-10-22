@@ -6,7 +6,10 @@ import sqlite3
 
 import pytest
 
-from src.storage import control_db, control_records
+from src.storage.control import (
+    control_db,
+    control_records,
+)
 from src.tenancy.context import TENANT_ID_PATTERN
 
 pytest_plugins = ["test.hosted_support"]
@@ -58,7 +61,7 @@ def test_hosted_control_db_holds_accounts_tenants_and_audit(hosted_env):
 
 
 def test_tenant_database_has_no_auth_tables(hosted_env):
-    from src.storage import database
+    from src.storage.engine import database
     from src.tenancy.context import TenantContext, use_tenant
     from src.tenancy.lifecycle import ensure_tenant
 

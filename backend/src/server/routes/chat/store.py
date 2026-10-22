@@ -3,8 +3,8 @@
 import uuid
 from datetime import datetime, timezone
 
-from src.storage.database import (
-    DEFAULT_PROJECT_ID,
+from src.storage.engine.database import DEFAULT_PROJECT_ID
+from src.storage.records.chat_session_records import (
     append_chat_message,
     delete_chat_messages,
     get_chat_session,

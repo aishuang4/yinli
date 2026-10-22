@@ -7,7 +7,7 @@ from pathlib import Path
 from src.config.runtime_paths import team_runtime_root
 from src.server.routes.chat.store import _append_assistant_message
 from src.server.routes.chat.team_runtime.store import TeamStore, TeamStoreError
-from src.storage.database import (
+from src.storage.records.chat_run_records import (
     get_chat_run,
     update_chat_run_status,
 )

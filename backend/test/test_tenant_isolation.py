@@ -1,13 +1,22 @@
 """两个托管租户的数据目录互不可见。"""
-
 from __future__ import annotations
+
+from src.storage.records.scheduled_job_records import get_user_notification
+from src.storage.records.scheduled_job_records import insert_user_notification
+from src.storage.records.group_studio_records import get_group_studio_snapshot
+from src.storage.records.workflow_records import list_workflow_runs
+from src.storage.records.workflow_records import create_workflow_run
+from src.storage.records.chat_session_records import insert_chat_session_if_absent
+from src.storage.records.chat_session_records import list_chat_sessions
+from src.storage.records.chat_session_records import get_chat_session
+
 
 from src.config.model_catalog import ModelCatalog, ModelEntry, ProviderConfig, _write, read_catalog
 from src.config.runtime_paths import skill_packages_root
 from src.memory.markdown_store import MarkdownMemoryStore
 from src.scheduler.service import ScheduledJobService
 from src.scheduler.settings import set_scheduled_jobs_settings
-from src.storage import database
+from src.storage.engine import database
 from src.tenancy.context import TenantContext, use_tenant
 from src.tenancy.lifecycle import ensure_tenant
 
@@ -36,15 +45,15 @@ def test_tenant_b_cannot_read_tenant_a_resources(hosted_env):
     ensure_tenant(USER_A)
     ensure_tenant(USER_B)
     with use_tenant(TenantContext.hosted(USER_A["id"])):
-        database.insert_chat_session_if_absent(_session("sess-a"))
-        database.insert_user_notification({
+        insert_chat_session_if_absent(_session("sess-a"))
+        insert_user_notification({
             "id": "ntf-a",
             "kind": "job_finished",
             "title": "A 的通知",
             
             "project_slug": "default",
         })
-        database.create_workflow_run({"id": "wf-a", "title": "A 的任务流", "goal": "只有 A"})
+        create_workflow_run({"id": "wf-a", "title": "A 的任务流", "goal": "只有 A"})
         with database._lock, database._connect() as conn:
             conn.execute(
                 """
@@ -92,13 +101,13 @@ def test_tenant_b_cannot_read_tenant_a_resources(hosted_env):
         ))
 
     with use_tenant(TenantContext.hosted(USER_B["id"])):
-        assert database.get_chat_session("sess-a") is None
-        assert database.list_chat_sessions() == [] or all(
-            item["id"] != "sess-a" for item in database.list_chat_sessions()
+        assert get_chat_session("sess-a") is None
+        assert list_chat_sessions() == [] or all(
+            item["id"] != "sess-a" for item in list_chat_sessions()
         )
-        assert database.get_user_notification("ntf-a") is None
-        assert all(item.get("id") != "wf-a" for item in database.list_workflow_runs())
-        assert database.get_group_studio_snapshot("grp-a") is None
+        assert get_user_notification("ntf-a") is None
+        assert all(item.get("id") != "wf-a" for item in list_workflow_runs())
+        assert get_group_studio_snapshot("grp-a") is None
         names = {item.name for item in ScheduledJobService().list_jobs()}
         assert "A 的任务" not in names
         habits = MarkdownMemoryStore().read_habits("default").content

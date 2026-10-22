@@ -8,7 +8,7 @@ from src.config.settings import parsed_admin_emails
 from src.server.auth.mail import deliver_login_code
 from src.server.auth.passwords import hash_password, verify_password
 from src.server.auth.secrets import new_code, new_token
-from src.storage import auth_records
+from src.storage.control import auth_records
 
 MIN_PASSWORD_LENGTH = 8
 

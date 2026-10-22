@@ -36,7 +36,7 @@ def to_daemon_path(path: Path) -> str:
 def primary_mount(project_slug: str, fallback: Path | None = None) -> Path:
     """托管只挂一个目录：该 Project 的 primaryPath，缺省时用 projects/<slug>/。"""
 
-    from src.storage.database import get_project
+    from src.storage.records.project_records import get_project
 
     project = get_project(project_slug) if project_slug else None
     primary = str((project or {}).get("primaryPath") or "").strip()

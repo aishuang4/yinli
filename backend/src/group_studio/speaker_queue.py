@@ -1,11 +1,11 @@
 """发言队列：只认 Worker，不解析正文 @。"""
-
 from __future__ import annotations
+
 
 from typing import Any
 
 from src.group_studio.events import emit_envelope
-from src.storage.database import (
+from src.storage.records.group_studio_records import (
     get_group_studio_snapshot,
     get_group_studio_speaker_queue,
     get_group_studio_wave_spoken,

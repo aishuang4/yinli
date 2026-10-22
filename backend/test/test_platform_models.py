@@ -14,7 +14,7 @@ from src.server.auth.routes import auth_router
 from src.server.local_access import LocalAccessMiddleware
 from src.server.routes.chat.handlers.send import start_chat_run
 from src.server.routes.chat.models import ChatMessage
-from src.storage import database
+from src.storage.engine import database
 
 
 @pytest.fixture()
@@ -50,7 +50,7 @@ def _token(client: TestClient, monkeypatch) -> str:
 
 def test_provided_uses_platform_layer_not_deployment_catalog(hosted_models, monkeypatch):
     from src.config.model_catalog import ModelCatalog, ModelEntry, ProviderConfig, _write
-    from src.storage import auth_records
+    from src.storage.control import auth_records
     from src.tenancy.context import TenantContext, use_tenant
 
     client = hosted_models

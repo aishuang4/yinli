@@ -1,6 +1,6 @@
 """到期 toolkit 装配：空合同走 Phase 1 五旗；非空合同按 claimed ∩ live。"""
-
 from __future__ import annotations
+
 
 from typing import Any
 
@@ -11,7 +11,11 @@ from src.scheduler.mcp_runtime import resolve_mcp_runtime_servers
 from src.scheduler.models import JobToolScope, ScheduledJob
 from src.scheduler.unattended_policy import agent_approval_policy
 from src.security.permissions import ApprovalPolicy
-from src.storage.database import list_http_tools, list_json_records, list_mcp_servers
+from src.storage.config.json_document_store import list_json_records
+from src.storage.records.resource_catalog_records import (
+    list_http_tools,
+    list_mcp_servers,
+)
 
 KNOWLEDGE_TOOLS_NAMESPACE = "knowledge_tools"
 ALWAYS_PREVIEW = [

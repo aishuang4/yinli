@@ -1,0 +1,36 @@
+name: yinli agent guidance
+
+on:
+  pull_request:
+    paths:
+      - 'yinli/**'
+      - 'scripts/check_agents_md.py'
+      - 'scripts/test_check_agents_md.py'
+      - '.github/workflows/yinli-agents-md.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'yinli/**'
+      - 'scripts/check_agents_md.py'
+      - 'scripts/test_check_agents_md.py'
+      - '.github/workflows/yinli-agents-md.yml'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: 单测
+        run: python scripts/test_check_agents_md.py
+      - name: 检查 yinli 指引
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            python scripts/check_agents_md.py --base-ref "${{ github.event.pull_request.base.sha }}" --github-annotations
+          else
+            python scripts/check_agents_md.py --before "${{ github.event.before }}" --after "${{ github.sha }}" --github-annotations
+          fi

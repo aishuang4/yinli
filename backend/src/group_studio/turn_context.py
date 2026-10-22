@@ -82,6 +82,6 @@ def note_member_spoke(group_id: str, speaker_id: str, *, role: str, body: str) -
         return
     if not speaker_id or speaker_id == "human":
         return
-    from src.storage.database import set_group_studio_member_last_spoke
+    from src.storage.records.group_studio_records import set_group_studio_member_last_spoke
 
     set_group_studio_member_last_spoke(group_id, speaker_id)

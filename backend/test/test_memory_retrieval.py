@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from src.memory.retrieval import (
+from src.memory.legacy.injection import (
     MEMORY_RECALL_MIN_SCORE,
     MemoryRetrievalContext,
-    build_habit_and_professional_prompt,
     build_memory_injection_text,
     build_memory_recall,
 )
+from src.memory.retrieval import build_habit_and_professional_prompt
 
 
 def test_live_injection_is_habits_and_professional_only():
@@ -93,7 +93,7 @@ def test_memory_injection_prefers_summary_over_source_sections():
 
 
 def test_memory_injection_dedupes_nodes_and_respects_budget():
-    from src.memory import retrieval
+    from src.memory.legacy import injection as retrieval
 
     class ManyNodes:
         def tree(self, **kwargs):

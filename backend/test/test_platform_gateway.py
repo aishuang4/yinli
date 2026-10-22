@@ -15,8 +15,12 @@ from src.server.auth.middleware import HostedSessionMiddleware
 from src.server.auth.routes import admin_router, auth_router
 from src.server.local_access import LocalAccessMiddleware
 from src.server.platform_gateway import router as gateway_router
-from src.storage import auth_records, control_db, database
-from src.storage.control_records import set_tenant_status
+from src.storage.engine import database
+from src.storage.control import (
+    auth_records,
+    control_db,
+)
+from src.storage.control.control_records import set_tenant_status
 
 
 class _FakeClient:

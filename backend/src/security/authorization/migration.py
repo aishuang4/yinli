@@ -1,5 +1,8 @@
 """权限 V2 配置迁移：先备份再改写，按租户幂等，不转换历史审批许可。"""
 
+from src.storage.records.resource_catalog_records import list_agents
+from src.storage.records.project_records import list_projects
+
 from contextlib import closing
 import hashlib
 import json
@@ -10,7 +13,7 @@ import yaml
 
 from src.catalog.paths import atomic_write_text
 from src.config.runtime_paths import agents_root, subagent_root, tenant_root
-from src.storage import database
+from src.storage.engine import database
 
 _FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*\n?(.*)\Z", re.DOTALL)
 _LEGACY = {"human_approval", "humanApproval", "tool_permission_mode", "toolPermissionMode",
@@ -63,9 +66,9 @@ def migrate_permission_configuration() -> dict:
             jobs = [dict(row) for row in conn.execute("SELECT id,agent_id,execution_policy FROM scheduled_jobs")]
             sessions = [dict(row) for row in conn.execute("SELECT id,approval_mode FROM chat_sessions")]
             # 旧 SQLite Agent 正文不改写，只保留迁移依据；文件迁移后由原 catalog 处理正文。
-            legacy_agents = {str(item["id"]): item.get("guardrails") or {} for item in database.list_agents()}
+            legacy_agents = {str(item["id"]): item.get("guardrails") or {} for item in list_agents()}
         roots = [agents_root()]
-        for project in database.list_projects(include_archived=True):
+        for project in list_projects(include_archived=True):
             root = Path(str(project.get("primaryPath") or "")) / ".agents"
             if root.is_dir():
                 roots.append(root)

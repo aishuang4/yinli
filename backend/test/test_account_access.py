@@ -13,7 +13,8 @@ from src.server.auth.middleware import HostedSessionMiddleware
 from src.server.auth.passwords import hash_password, verify_password
 from src.server.auth.routes import admin_router, auth_router
 from src.server.local_access import LocalAccessMiddleware
-from src.storage import auth_records, database
+from src.storage.engine import database
+from src.storage.control import auth_records
 
 
 @pytest.fixture()
@@ -50,7 +51,7 @@ def test_hosted_startup_creates_default_admin(auth_db, monkeypatch):
 def test_desktop_startup_does_not_create_admin(auth_db, monkeypatch):
     monkeypatch.setattr("src.config.settings.settings.serve_mode", "desktop")
     from src.server.auth.service import ensure_default_admins
-    from src.storage import control_db
+    from src.storage.control import control_db
 
     ensure_default_admins()
     assert not control_db.control_db_path().exists()
@@ -87,7 +88,7 @@ def test_auth_tables_store_only_hashes(auth_db, monkeypatch):
     """控制面建库后账号表存在，令牌和验证码不以明文入库。"""
 
     monkeypatch.setattr("src.config.settings.settings.serve_mode", "hosted")
-    from src.storage import control_db
+    from src.storage.control import control_db
 
     control_db.ensure_control_db()
     with sqlite3.connect(control_db.control_db_path()) as conn:
@@ -117,7 +118,7 @@ def test_auth_tables_store_only_hashes(auth_db, monkeypatch):
 
 def test_password_hash_round_trip_hides_plaintext(auth_db, monkeypatch):
     monkeypatch.setattr("src.config.settings.settings.serve_mode", "hosted")
-    from src.storage import control_db
+    from src.storage.control import control_db
 
     password = "correct-horse"
     stored = hash_password(password)
@@ -163,7 +164,7 @@ def test_register_verify_login_and_duplicate_email(auth_db, monkeypatch):
     sent = _register(client, monkeypatch, "User@Example.com")
     again = _register(client, monkeypatch, "user@example.com")
     assert again == []
-    from src.storage import control_db
+    from src.storage.control import control_db
 
     with sqlite3.connect(control_db.control_db_path()) as conn:
         assert conn.execute("SELECT COUNT(*) FROM auth_users").fetchone()[0] == 1
@@ -241,7 +242,7 @@ def test_sse_chunk_refreshes_last_seen(auth_db, monkeypatch):
     import asyncio
 
     from src.server.auth.presence import iter_with_presence
-    from src.storage import control_db
+    from src.storage.control import control_db
 
     monkeypatch.setattr("src.config.settings.settings.serve_mode", "hosted")
     auth_records.create_session(user_id="usr_sse", raw_token="sse-token", client_kind="web")
@@ -348,7 +349,7 @@ def test_presence_aggregates_web_and_desktop_then_expires(auth_db, monkeypatch):
     assert row["clients"] == ["desktop", "web"]
     assert listing.json()["summary"]["online"] == 1
 
-    from src.storage import control_db
+    from src.storage.control import control_db
 
     with sqlite3.connect(control_db.control_db_path()) as conn:
         conn.execute("UPDATE auth_sessions SET last_seen_at = '2000-01-01T00:00:00+00:00'")

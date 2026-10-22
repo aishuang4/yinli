@@ -13,7 +13,11 @@ from src.config.runtime_paths import (
     forget_tenant_directories,
     tenants_root,
 )
-from src.storage import auth_records, control_records, database
+from src.storage.engine import database
+from src.storage.control import (
+    auth_records,
+    control_records,
+)
 from src.tenancy.context import TENANT_ID_PATTERN, TenantContext, use_tenant
 
 logger = logging.getLogger(__name__)

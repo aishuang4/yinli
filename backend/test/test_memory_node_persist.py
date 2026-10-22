@@ -1,17 +1,19 @@
 """运行后节点记忆持久化测试。"""
-
 from __future__ import annotations
+
+from src.storage.records.trace_records import list_run_events
+
 
 import asyncio
 import time
 
 import pytest
 
-from src.memory.node_persist import MemoryNodePersistInput, persist_completed_run_memory_node
+from src.memory.legacy.node_persist import MemoryNodePersistInput, persist_completed_run_memory_node
 from src.server.routes.chat.completion import finalize_successful_leader_run
 from src.server.routes.chat.models import ChatToolRun
 from src.server.routes.chat.store import _append_assistant_message, _append_user_message
-from src.storage import database
+from src.storage.engine import database
 
 
 @pytest.fixture()
@@ -158,7 +160,7 @@ def test_successful_completion_records_memory_node_trace_without_chat_event(isol
             ),
         ),
     )
-    trace_events = database.list_run_events("session-1")
+    trace_events = list_run_events("session-1")
     memory_events = [event for event in trace_events if event["eventType"] == "MEMORY_AUDIT"]
 
     assert not any(event.event_type == "MEMORY_AUDIT" for event in events)
@@ -245,7 +247,7 @@ class FakeMemoryNodeService:
 
 
 def test_summary_from_turn_is_one_sentence_without_markdown_noise():
-    from src.memory.node_persist import _summary_from_turn
+    from src.memory.legacy.node_persist import _summary_from_turn
 
     user = "帮我把 Q3 销售表按地区汇总。顺便看看有没有异常值。"
     assistant = (

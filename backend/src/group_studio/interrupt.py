@@ -1,6 +1,6 @@
 """取消当前 GroupRun：插话、暂停、停止。不调用 Chat background cancel。"""
-
 from __future__ import annotations
+
 
 from src.group_studio.events import emit_envelope
 from src.group_studio.sessions import (
@@ -8,7 +8,7 @@ from src.group_studio.sessions import (
     cancel_sessions_for_run,
     mark_interrupt,
 )
-from src.storage.database import (
+from src.storage.records.group_studio_records import (
     get_group_studio_pending_approval,
     get_group_studio_snapshot,
     set_group_studio_current_run_id,

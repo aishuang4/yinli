@@ -3,15 +3,15 @@
 长讨论不按写死的发言轮次打断。连续几轮置顶和工人正文都没有变化，才暂停。
 cancelled 因插话或暂停不计 no_progress。
 """
-
 from __future__ import annotations
+
 
 from typing import Any
 
 from src.group_studio.events import emit_envelope
 from src.group_studio.notify import KIND_CIRCUIT, notify_studio
 from src.group_studio.sessions import take_fingerprint
-from src.storage.database import (
+from src.storage.records.group_studio_records import (
     get_group_studio_snapshot,
     list_group_studio_messages,
     update_group_studio_state,
@@ -116,7 +116,7 @@ def on_run_finished(
         event_type="GROUP_STATUS",
         payload={"from": status, "to": "paused", "reason": "circuit"},
     )
-    from src.group_studio.service import _emit_system_notice
+    from src.group_studio.speaking import _emit_system_notice
 
     _emit_system_notice(group_id, "先停一下：这一轮说得有点多。点继续或再发一条就可以接着聊。")
     emit_envelope(

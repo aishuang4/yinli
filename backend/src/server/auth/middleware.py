@@ -41,7 +41,7 @@ class HostedSessionMiddleware:
             await response(scope, receive, send)
             return
         user = found["user"]
-        from src.storage.control_records import get_tenant
+        from src.storage.control.control_records import get_tenant
         from src.tenancy.context import TenantContext, reset_tenant, set_tenant
         from src.tenancy.lifecycle import ensure_tenant
 

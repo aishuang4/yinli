@@ -12,7 +12,7 @@ import logging
 from pydantic import BaseModel, Field
 
 from src.memory.admission import is_trivial_turn
-from src.memory.extraction_agents import _extract_json_object, _run_json_agent, _system_agent_id
+from src.memory.json_agent import extract_json_object, run_json_agent, system_agent_id
 from src.memory.markdown_store import MarkdownMemoryStore
 from src.memory.prompt_cache import invalidate_professional_prompts
 from src.memory.timeline import search_timeline
@@ -169,8 +169,8 @@ async def run_professional_update_agent(
 ) -> ProfessionalUpdatePayload | None:
     """判断这一轮要不要改写该智能体的专业全文。"""
 
-    text = await _run_json_agent(
-        agent_id=_system_agent_id(
+    text = await run_json_agent(
+        agent_id=system_agent_id(
             "professional-update",
             model_name,
             fallback_names or [],
@@ -199,7 +199,7 @@ async def run_professional_update_agent(
         fallback_names=fallback_names or [],
         max_tokens=2200,
     )
-    data = _extract_json_object(text)
+    data = extract_json_object(text)
     if not data:
         return None
     return ProfessionalUpdatePayload.model_validate(data)

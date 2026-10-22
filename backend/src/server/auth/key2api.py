@@ -12,7 +12,7 @@ import httpx
 from src.config.model_catalog import ModelCatalog, ModelEntry, ProviderConfig
 from src.config.runtime_settings import RuntimeModelBinding, resolve_model_binding
 from src.config.settings import settings
-from src.storage import auth_records
+from src.storage.control import auth_records
 
 PLATFORM_PREFIX = "platform:"
 DEFAULT_BASE_URL = "http://103.236.80.228:3000"

@@ -8,7 +8,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from src.storage.maintenance import DevResetRefused, backup, health, recover, reset_dev_database
+from src.storage.engine.maintenance import DevResetRefused, backup, health, recover, reset_dev_database
 from src.tenancy.context import TenantContext, use_tenant
 
 

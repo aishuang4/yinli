@@ -1,6 +1,8 @@
 """定时任务与通知 REST、session kind 默认过滤、runs triggerSource。"""
-
 from __future__ import annotations
+
+from src.storage.records.chat_session_records import insert_chat_session_if_absent
+
 
 from datetime import datetime, timedelta, timezone
 
@@ -13,16 +15,18 @@ from src.scheduler.service import ScheduledJobService
 from src.scheduler.settings import is_scheduled_jobs_enabled, set_scheduled_jobs_enabled
 from src.server.routes import chat, notifications, scheduled_jobs, settings as settings_routes
 from src.server.routes.chat.background_runs import MAX_BACKGROUND_RUNS
-from src.storage import database
-from src.storage.database import (
+from src.storage.engine import database
+from src.storage.engine.database import (
     DEFAULT_PROJECT_ID,
     DEFAULT_WORKSPACE_ID,
     ensure_db,
+)
+from src.catalog.loader import import_sqlite_agent_record
+from src.storage.records.chat_run_records import (
     list_chat_runs,
-    list_user_notifications,
-    upsert_agent,
     upsert_chat_run,
 )
+from src.storage.records.scheduled_job_records import list_user_notifications
 
 
 @pytest.fixture()
@@ -37,7 +41,7 @@ def isolated_db(tmp_path, monkeypatch):
 @pytest.fixture()
 def client(isolated_db):
     ensure_db()
-    upsert_agent({
+    import_sqlite_agent_record({
         "id": "agent-1",
         "name": "agent-1",
         "system_prompt": "prompt",
@@ -260,7 +264,7 @@ def test_run_now_rejects_non_active_job(client):
 
 
 def test_session_catalog_defaults_to_chat_kind(client):
-    from src.storage import database
+    from src.storage.engine import database
 
     for item in (
         {
@@ -276,7 +280,7 @@ def test_session_catalog_defaults_to_chat_kind(client):
             "updated_at": "2026-08-21T00:00:02+00:00",
         },
     ):
-        database.insert_chat_session_if_absent({
+        insert_chat_session_if_absent({
             **item,
             "agent_id": "agent-1",
             "agent_name": "助手",

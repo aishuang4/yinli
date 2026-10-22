@@ -133,7 +133,7 @@ def sync_job_definitions(*, project_root=None, project_id: str = "default", **_e
 
 def _sync_job_definitions(*, project_id: str) -> dict[str, int]:
     from src.scheduler.service import ScheduledJobService
-    from src.storage.database import get_scheduled_job
+    from src.storage.records.scheduled_job_records import get_scheduled_job
 
     service = ScheduledJobService()
     created = 0

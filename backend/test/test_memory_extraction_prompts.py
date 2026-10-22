@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from src.memory import extraction_agents
+from src.memory.legacy import extraction_agents
 
 
 def test_memory_reflection_prompt_requires_chinese_output():

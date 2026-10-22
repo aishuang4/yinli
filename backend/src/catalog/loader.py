@@ -1,6 +1,6 @@
 """扫描 Agent profiles，维护进程内 catalog 缓存。"""
-
 from __future__ import annotations
+
 
 import hashlib
 import logging
@@ -19,6 +19,7 @@ from src.catalog.paths import (
     system_profiles_dir,
 )
 from src.catalog.profiles import parse_profile_markdown, write_profile_file
+from src.catalog.role_invariants import apply_role_invariants
 from src.catalog.system_defaults import (
     DEFAULT_AGENT_PROMPT_VERSION_TAG,
     DEFAULT_WEBSEARCH_JOB_AGENT_VERSION_TAG,
@@ -117,8 +118,6 @@ def _merge_system_agent(base: AgentResponse, overlay: AgentResponse | None) -> A
         "source_kind": "system_overlay",
         "role": base.role,
     })
-    from src.catalog.profiles import apply_role_invariants
-
     warnings: list[str] = []
     return apply_role_invariants(merged, warnings)
 
@@ -236,8 +235,6 @@ def list_registered_agents() -> list[AgentResponse]:
 
 def save_agent(agent: AgentResponse) -> AgentResponse:
     """写入 profile 或系统 overlay，并失效缓存。"""
-
-    from src.catalog.profiles import apply_role_invariants
 
     warnings: list[str] = []
     prepared = apply_role_invariants(agent.model_copy(update={"updated_at": utc_now()}), warnings)

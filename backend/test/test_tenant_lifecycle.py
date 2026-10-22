@@ -1,13 +1,18 @@
 """租户创建与会话中间件。沙箱清理留到任务组 6。"""
-
 from __future__ import annotations
+
+from src.storage.records.project_records import get_project
+
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.server.auth.middleware import HostedSessionMiddleware
-from src.storage import auth_records, control_records
+from src.storage.control import (
+    auth_records,
+    control_records,
+)
 from src.tenancy.context import current_tenant
 from src.tenancy.lifecycle import ensure_tenant
 
@@ -26,7 +31,7 @@ def test_ensure_tenant_is_idempotent_and_seeds_default_project(hosted_env, monke
     from src.config.model_catalog import models_path
     from src.config.runtime_paths import projects_root, skill_packages_root
     from src.scheduler.settings import get_scheduled_jobs_settings_public
-    from src.storage import database
+    from src.storage.engine import database
     from src.tenancy.context import use_tenant
 
     monkeypatch.setattr("src.config.settings.settings.key2api_sync_token", "")
@@ -36,7 +41,7 @@ def test_ensure_tenant_is_idempotent_and_seeds_default_project(hosted_env, monke
     assert second.tenant_id == first.tenant_id
     assert control_records.get_tenant(HOSTED_USER["id"])["status"] == "disabled"
     with use_tenant(first):
-        project = database.get_project("default")
+        project = get_project("default")
         assert project is not None
         assert str(project["primaryPath"]).startswith(str(projects_root()))
         assert skill_packages_root().is_dir()

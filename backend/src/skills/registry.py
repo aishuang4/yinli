@@ -2,8 +2,8 @@
 
 HTTP 路由留在 src.server.routes.skills。这里不依赖 FastAPI 路由对象。
 """
-
 from __future__ import annotations
+
 
 import hashlib
 import json
@@ -46,12 +46,11 @@ from src.server.routes.skill_packages import (
     _split_frontmatter,
     _write_skill_package as _write_skill_package_impl,
 )
-from src.storage.database import (  # 路由仍从本模块再导出这些名字
-    get_project as get_project,
-    delete_json_record as delete_json_record,
-    get_json_record as get_json_record,
-    list_json_records as list_json_records,
-    upsert_json_record as upsert_json_record,
+from src.storage.config.json_document_store import (
+    delete_json_record,
+    get_json_record,
+    list_json_records,
+    upsert_json_record,
 )
 
 logger = logging.getLogger(__name__)
@@ -371,7 +370,7 @@ _OVERRIDE_FIELDS = ("enabled", "installed", "availableToAllAgents")
 def _upsert_external_override(skill_id: str, **fields: object) -> dict[str, bool]:
     """写入 skill_overrides 表。只保留 enabled / installed / availableToAllAgents，其它关键字丢弃。"""
 
-    from src.storage.database import write_tx
+    from src.storage.engine.database import write_tx
 
     current = _override_record(skill_id)
     current.update({key: bool(value) for key, value in fields.items() if key in _OVERRIDE_FIELDS})
@@ -412,7 +411,7 @@ def _upsert_external_override(skill_id: str, **fields: object) -> dict[str, bool
 def delete_skill_override(skill_id: str) -> None:
     """删掉一条策略覆盖。列表接口若只清内存，重扫会从这张表把记录读回来。"""
 
-    from src.storage.database import write_tx
+    from src.storage.engine.database import write_tx
 
     _external_skill_overrides.pop(skill_id, None)
     with write_tx() as conn:
@@ -574,7 +573,7 @@ def _project_scan_roots(extra: Path | None = None) -> list[Path]:
     if extra is not None:
         _add(Path(extra))
     try:
-        from src.storage.database import list_projects
+        from src.storage.records.project_records import list_projects
 
         for project in list_projects():
             for path in _folder_paths(project):
@@ -646,9 +645,39 @@ def _load_user_skills() -> None:
 
 
 def cached_skill_records() -> list[dict]:
-    """给仍从存储模块读目录的调用方。内容来自本次扫描，不是 skills 表。"""
+    """本次扫描缓存里的技能包。内容来自 `SKILL.md`，不是数据库表。"""
 
     return [skill.model_dump(by_alias=True) for skill in _skills.values()]
+
+
+def write_skill_packages(records: dict[str, dict]) -> None:
+    """把技能包写成 `SKILL.md` 并重新扫描。开关写入 `skill_overrides`。"""
+
+    root = skill_packages_root()
+    root.mkdir(parents=True, exist_ok=True)
+    for data in records.values():
+        skill_id = str(data["id"])
+        name = str(data.get("name") or skill_id)
+        description = str(data.get("description") or name)
+        body = str(data.get("content") or "")
+        package = root / skill_id
+        package.mkdir(parents=True, exist_ok=True)
+        front = yaml.safe_dump(
+            {"name": name, "description": description},
+            allow_unicode=True,
+            sort_keys=False,
+        )
+        (package / "SKILL.md").write_text(f"---\n{front}---\n\n{body}\n", encoding="utf-8")
+        _upsert_external_override(
+            skill_id,
+            installed=str(data.get("status") or "installed") == "installed",
+            enabled=bool(data.get("enabled", False)),
+            availableToAllAgents=bool(data.get(
+                "availableToAllAgents",
+                data.get("available_to_all_agents", True),
+            )),
+        )
+    reload_skill_cache()
 
 
 def discover_external_skills(
@@ -798,7 +827,7 @@ def _package_is_deletable(package: Path, project_root: Path) -> bool:
 def _read_skill_overrides() -> dict[str, dict[str, bool]]:
     """从 skill_overrides 表读策略覆盖，不改进程缓存。"""
 
-    from src.storage.database import read_conn
+    from src.storage.engine.database import read_conn
 
     loaded: dict[str, dict[str, bool]] = {}
     try:
@@ -1101,4 +1130,3 @@ def _install_skill_registry() -> None:
 
 
 _install_skill_registry()
-

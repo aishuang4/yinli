@@ -3,8 +3,8 @@
 SQLite `memory_nodes` 是事实源；Zvec `memory_nodes` collection 是可重建索引副本。
 节点只保存用户输入、Agent 最终输出和摘要，不保存工具调用过程。
 """
-
 from __future__ import annotations
+
 
 import hashlib
 import re
@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from src.storage.database import (
+from src.storage.records.memory_records import (
     find_session_day_memory_node,
     get_memory_node,
     list_memory_retrieval_feedback_scores,

@@ -1,10 +1,11 @@
 """群聊工作室测试辅助：把 drafting 工作室确认进 discussing。"""
-
 from __future__ import annotations
+
 
 from fastapi.testclient import TestClient
 
-from src.storage.database import DEFAULT_PROJECT_ID, update_group_studio_state
+from src.storage.engine.database import DEFAULT_PROJECT_ID
+from src.storage.records.group_studio_records import update_group_studio_state
 
 
 def confirm_intake_for_tests(

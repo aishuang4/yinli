@@ -1,6 +1,6 @@
 """ScheduledJob 状态机与时钟推进。本模块不启动 ticker，也不注册 REST。"""
-
 from __future__ import annotations
+
 
 import logging
 from datetime import datetime, timedelta, timezone
@@ -46,9 +46,10 @@ from src.scheduler.schedule import (
     to_utc_iso,
     validate_schedule_expr,
 )
-from src.storage.database import (
+from src.skills.registry import cached_skill_records
+from src.storage.records.project_records import get_project
+from src.storage.records.scheduled_job_records import (
     delete_scheduled_job,
-    get_project,
     get_scheduled_job,
     get_scheduled_job_run,
     get_scheduled_job_run_by_key,
@@ -61,12 +62,11 @@ from src.storage.database import (
     list_scheduled_jobs,
     list_starting_scheduled_job_runs_without_chat_run,
     list_stuck_clock_scheduled_job_runs,
-    list_skills,
     update_scheduled_job,
     update_scheduled_job_run,
     update_scheduled_job_run_and_job,
 )
-from src.storage.scheduled_job_records import UniqueConstraintError
+from src.storage.records.scheduled_job_records import UniqueConstraintError
 
 logger = logging.getLogger(__name__)
 ON_TIME_SLACK_SECONDS = 60
@@ -1235,7 +1235,7 @@ class ScheduledJobService:
         if job.mode != "script" and not self._agent_is_available(job.agent_id):
             raise ScheduledJobStateError("Agent 不可用，不能启用任务")
 
-        skill_catalog = {str(item.get("id") or ""): item for item in list_skills()}
+        skill_catalog = {str(item.get("id") or ""): item for item in cached_skill_records()}
         for skill_id in job.skill_ids:
             skill = skill_catalog.get(skill_id)
             if (

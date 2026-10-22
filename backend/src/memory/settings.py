@@ -3,13 +3,16 @@
 当前只持久化可安全热更新的准入策略；向量库 provider、schema 和 embedding 维度仍由
 VectorStorePolicy 管理，不能在这里修改。
 """
-
 from __future__ import annotations
+
 
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from src.storage.database import get_json_record, upsert_json_record
+from src.storage.config.json_document_store import (
+    get_json_record,
+    upsert_json_record,
+)
 
 MEMORY_SETTINGS_NAMESPACE = "memory_settings"
 ADMISSION_POLICY_KEY = "admission_policy"

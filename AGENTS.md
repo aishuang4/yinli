@@ -1,121 +1,84 @@
 # AGENTS.md
 
-This file provides guidance to AI coding agents when working with code in this repository.
+`CLAUDE.md` 导入本文件。不要往垫片里加规则。
 
-## 项目概述
+## 先读
 
-引力 YINLI 是基于 AgentScope 2.0 + Electron + React 的本地优先办公 AI 工作台。用户在 Chat 界面选择单个 Agent 或 Team 协作完成文档、表格、文件和项目任务，支持 MCP 工具、Skills 技能、HTTP 知识库工具、权限控制、容器沙箱执行和新记忆系统 MVP。旧记忆模块已删除，当前记忆能力按新方案通过 hooks / tools / 后处理服务接入，不恢复旧 memory runtime。
+- [frontend/AGENTS.md](frontend/AGENTS.md) — React 应用、界面和 Chat 展示。
+- [backend/AGENTS.md](backend/AGENTS.md) — FastAPI、Agent 运行时、存储和定时任务。
 
-技术栈：Electron 壳 + React 19/TypeScript/Vite 前端 + Python/FastAPI/AgentScope 2.0 后端 + SQLite 存储。模型默认接 DeepSeek，运行时可切换至 OpenAI、Anthropic、DashScope、Gemini、Ollama、自定义 OpenAI 兼容等十余个供应商。
+改某个目录前先读离它最近的文件。一条规则只写在一个文件里。其他地方用链接，不要抄过来。
 
-`AGENT_WORKSTATION_SERVE_MODE` 默认 `desktop`：本机回环可直接使用，数据留在本机 `models.json` 和数据目录。未连接托管账号且本机默认模型没有 Key 时，弹出本机 Key 引导。本机可以登录引力云端。令牌进本机密钥存储，平台模型经 `/api/platform/v1` 进入完整 Agent 运行时。`hosted` 要求邮箱验证后登录，Web 用 Cookie。新用户会得到自己的 Workspace / Project。Workspace、Project、Chat、群聊、定时任务和习惯记忆按租户目录 `tenants/<usr_…>/` 物理隔离，不再使用 `owner_user_id`，也不再运行 `assign_owners`。托管必须配置 `AGENT_WORKSTATION_KEY2API_SYNC_TOKEN`，缺少令牌时拒绝启动。验证通过会向 key2api 同步一把 `k2a_`，Chat 使用 `platform:` 模型并消耗该 Key 的额度；用户中心读 `GET /api/auth/usage`。管理员能看 90 秒在线状态，并能停用或删除账号；删除清掉该用户在这台服务器上的租户目录，不删除 key2api 里的账号。同一邮箱再次注册若已属于另一个 `external_id`，同步返回 409，不会把旧 Key 交给新用户。Web 与桌面不互相同步会话或文件。已登录（Web 会话或桌面已连接托管账号）不弹本机 Key 引导。
+## 这是什么
 
-## 常用命令
+引力 YINLI 是本地优先的办公 AI 工作台。桌面壳是 Electron，界面是 React，API 是基于 AgentScope 的 FastAPI，数据在本机 SQLite。
+
+用户在 Chat 里用一个 Agent，或用临时 Team。范围内有 MCP、Skills、HTTP 工具、权限、沙箱，以及当前的记忆路径。
+
+## 地图
+
+- `frontend/` — Vite React 应用。页面、功能和 Chat 流在这里。
+- `backend/` — Python 包 `src`。路由、运行时、存储和工具在这里。
+- `electron/` — 桌面主进程和 preload。开发模式加载 Vite。生产模式加载 `frontend/dist` 并拉起 API。
+- `docs/` — 架构和契约。从 [docs/README.md](docs/README.md) 进入。
+- `config/product-features.json` — 打包用的功能档。
+- `scripts/dev.sh` — 本地 API 在 8765，Vite 在 5173。
+
+## 依赖方向
+
+- 前端只通过 `/api` 调用后端。Vite 把 `/api` 代理到 `localhost:8765`。
+- Electron 渲染进程只用 preload 桥。保持 `contextIsolation` 开启、`nodeIntegration` 关闭。
+- Chat 处理函数和 Team Runtime 不导入 `group_studio`。
+- `group_studio` 和 `scheduler` 不导入 `src.server.routes.chat`。共用调用走 `src.runtime`。
+- 新增的跨域 Chat 内部导入会让 `backend/test/test_import_boundaries.py` 失败。
+- 不导入别的域里以下划线开头的私有函数。这类名字留在本域。
+- `TODO(agents-md):` 还没有 import-linter 契约。上面的边界测试就是检查。
+
+## 命令
+
+在仓库根目录：
 
 ```bash
-# 一键启动前后端开发服务（后端 8765，前端 5173）
 ./scripts/dev.sh
-
-# 后端（在 backend/ 目录）
-uv sync                                                          # 安装依赖
-uv run python -m uvicorn src.server.main:app --reload --port 8765  # 启动 API
-uv run pytest                                                    # 运行全部测试
-uv run pytest test/test_secret_store.py::test_memory_secret_store_round_trip  # 运行单个测试
-
-# 前端（在 frontend/ 目录）
-npm install
-npm run dev      # Vite dev server
-npm run electron:dev      # 开发模式启动 Electron 桌面窗口
-npm run electron:compile  # 编译 Electron 主进程和 preload
-npm run electron:pack     # 当前平台 Electron 内测打包
-npm run electron:build:mac  # 生成 macOS 内测包
-npm run electron:build:win  # 生成 Windows 内测包
-npm run build    # tsc -b && vite build
-npm run lint     # eslint
-npm test         # vitest 单测
-
-# 后端桌面端可执行文件（在目标平台分别执行）
 ./scripts/build-backend-desktop.sh
 ```
 
-首次运行需 `cp backend/.env.example backend/.env` 并填入 `AGENT_WORKSTATION_DEEPSEEK_API_KEY`。环境要求：Node >= 22.12（dev.sh 优先用 nvm 切到 24；Electron / Vitest 不支持 Node 20）、Python >= 3.11、uv。
+第一次跑 API 前，把 `backend/.env.example` 复制为 `backend/.env`，并设置 `AGENT_WORKSTATION_DEEPSEEK_API_KEY`。
 
-## 架构要点
+需要 Node >= 22.12、Python >= 3.11 和 uv。`./scripts/dev.sh` 优先用 Node 24。
 
-### 后端请求流（核心链路）
+各包自己的命令写在 [frontend/AGENTS.md](frontend/AGENTS.md) 和 [backend/AGENTS.md](backend/AGENTS.md)。
 
-`backend/src/server/main.py` 注册所有路由，前缀均为 `/api/*`。关键路径是对话流：
+## 共用规则
 
-1. **`routes/chat/handlers/send.py`** — `POST /api/chat/send` 是 Chat SSE 统一入口，只负责请求读取、用户消息写入、后台 Run 启动、前置错误处理和 SSE 编排。已删除的是旧独立 Plan Runtime（`runtime.kind=plan`）和旧独立 Subagent Runtime（`runtime.kind=subagent`）；当前 Plan Mode 通过 middleware 接入单 Agent ReAct，当前 Subagent 由 `DelegateTask` fork attached 文件任务，通过 wait/read 工具消费 `result.md`，全部 child 终态且 consumed 后父 Run 才能结束。后续不要在旧路由、旧字段或旧兼容事件上继续补丁式开发。
+- 改了边界、公开导出、命令、配置键或目录时，同一次改动里更新最近的 `AGENTS.md`。
+- 代码注释、docstring 和 TODO 文档用简体中文。标识符保持英文。
+- 这些指引文件用简体中文。一条规则一行。路径、符号和命令放在反引号里。
+- 长规范见 [docs/development-guidelines.md](docs/development-guidelines.md)。和本目录树不一致时，以和代码相符的那条为准。
+- 不提交密钥、本地数据库、构建产物和日志。
+- 提交说明用短英文前缀，例如 `fix:`、`feat:`、`docs:`。
+- 提交前跑 `git diff --check`。改了后端就跑后端测试。改了前端就跑前端构建。
+- 修过一次能复现的 bug，就补一个小的回归测试。
+- 大功能先在 `docs/` 写设计。上线后留下仍然成立的决定，并更新 [docs/project-todo.md](docs/project-todo.md)。
+- 被替换的计划不留在 `docs/`。
+- 事件字段只写在对应契约里。其他文档链接到该契约。
+- 改 Chat SSE 事件前先更新 [docs/chat-sse-event-contract.md](docs/chat-sse-event-contract.md)。前端只读这份契约里的事件。
+- 不把通知写进 Chat SSE。
+- 不恢复已删除的记忆模块、`runtime.kind=plan` 或 `runtime.kind=subagent`。
+- Plan Mode 留在 ReAct middleware 上。Subagent 用 `DelegateTask` 文件任务，再用 `SubagentTaskWait` 和 `SubagentResultRead` 汇合。
+- 不加 `memory` 运行时分支。记忆从 hooks、工具和运行后服务进入。
+- `middleware` 按 AgentScope hooks 或 `MiddlewareBase` 理解。
+- 产品档从 `config/product-features.json` 经 `GET /api/settings/product-features` 读取。不要写死 `OFFLINE_VIEWS`。
+- `chat` 和 `settings` 保持开启。关掉页面只藏入口，并让对应管理 API 返回 404。
+- 不因为页面被藏就关掉 `/api/chat/runs`、Agent / Skill / MCP 执行 API，或 `/api/settings/models`。
+- 环境变量用 `AGENT_WORKSTATION_` 前缀。默认服务模式是 `desktop`。
+- 缺少 `AGENT_WORKSTATION_KEY2API_SYNC_TOKEN` 时拒绝以托管模式启动。
+- Web 和桌面不同步会话或文件。
+- 业务代码里不放真实 token、私有地址或密码。
 
-2. **`routes/chat/readiness_gate.py`** — Chat 前置信息充足性判断。系统内置 `ReadinessAgent` 模型优先、规则兜底，只判断当前输入是否可以启动 Runtime；业务信息缺口交给主 Agent 在 ReAct 内通过 `AskUser` 外部工具暂停并恢复。ReadinessAgent 不选择架构、不选择 Team、不选择 Skill、不决定 ToolScope。
+## 参考
 
-3. **`routes/chat/intent_router.py`** — Chat 第一层架构路由。仅在 readiness 通过后运行，模型语义路由优先、规则路由兜底；当前只决定本轮进入 `react`，旧 `runtime.kind=plan` 与 `runtime.kind=subagent` 已删除，不再作为路由结果。Plan Mode 和 Subagent 委托都是 ReAct 内部增强，不是 architecture。`clarification` 不是 runtime.kind，也不是新的运行时分支。它不选择 Team、不选择 Member、不选择 Skill、不决定 ToolScope。第二层 `executor` 由请求的显式 `mode` 机械决定：`mode=agent` 为 `single_agent`，`mode=team` 为 `team`。Team 模式仍选择一个 Agent 作为本轮 Leader，不选择持久 Team。路由结果写入 `INTENT_ROUTE` trace。
-
-4. **`routes/chat/runtime_dispatcher.py` / `routes/chat/react_runtime.py`** — Chat Runtime 分发与 ReAct 执行入口。`runtime_dispatcher.execute_chat_runtime()` 只按第一层 `runtime.kind` 分发；当前仅 `react` 在线，信息不足时由主 Agent 在 Runtime 内调用 `AskUser`，通过 AgentScope `RequireExternalExecutionEvent` 暂停。`react_runtime.execute_react_runtime()` 再按第二层 `executor.kind` 执行：`single_agent` 直接运行主 Agent，`team` 委托全新的 `TeamRunService`，由 Leader 动态组建临时团队、Member 隔离执行、Mailbox 协作并独立综合最终答案。
-
-5. **`routes/chat/runtime_builder.py`** — IntentRoute 之后的运行时组装层。负责合成本轮模型配置、主 Agent runtime cache key、`MainAgentRuntimeSpec`，并通过 `create_main_agent_from_spec()` 委托工厂创建/复用 Agent。Chat 请求不包含持久 Team 或固定成员上下文。Skill 选择由 `skill_selector.py` 处理；工具范围由 `tool_scope_resolver.py` 处理。
-
-6. **`routes/chat/team_runtime/`** — 一次性 Team Runtime。每轮由 `TeamRunService` 创建全新文件状态，Leader 使用 Team 控制工具动态创建临时 Member 和共享任务，`TeamCoordinator` 按依赖并发运行隔离 Member session：成员 ≤ 6、任务 ≤ 12、Leader 协调最多 64 轮 ReAct（未调用 `team_finish_coordination` 但已有成员和任务时自动进入 executing，避免整轮在协调阶段失败）、单任务 10 分钟超时，失败任务自动重派一次（新 session、带失败原因），仍失败则保留 failed 并级联下游，只要有成功任务就进入无工具综合阶段做部分综合（`run.partial`），全部失败才判整轮失败；成员 Write/Edit 的 base 与 scope 都限制在 `<session workspace>/team/<run>/<member>/` 私有目录（不能用更宽的 session cwd 当 Write base），`team_submit_result` 正文 ≤ 6000 字，综合输入是 JSON 且邮件裁剪。Team 文件状态和 `events.jsonl` 是领域事实源；展示通过内部 `TEAM_DOMAIN_EVENT` 归一化为 Domain Event，再统一投影为 `RUNTIME_EVENT` 和 `DisplaySnapshot V4` 中的 `team/team-member/team-task/team-activity/team-mail` Block，不得恢复顶层 `TEAM_EVENT`、独立 `teamSnapshot` 或 `TeamConsoleState`。用户可通过 active TeamRun Mailbox API 向任意成员投递干预消息；Member 存在未读消息时不得提交结果，综合期间收到新消息必须重新综合。
-   Chat 与 Sandbox 在单 Agent 模式选择 Agent；切换到 Team 模式后沿用该 Agent 作为 Leader，并隐藏选择器。禁止恢复 Team、Member 或 Leader 下拉框，也禁止向 Chat Runtime 传入 `team_id`、`team_name`、`team_members`。
-
-7. **`routes/chat/leader_stream.py`** — Leader/单 Agent 事件流处理。消费 `agent.reply_stream()`，维护 `LeaderStreamState`，处理模型 cache、trace、permission decision、tool artifacts、HITL 早停、流式文本/思考累计、Skill end 和模型输出后的 clarification 兜底。
-
-8. **`routes/chat/completion.py`** — 单 Agent/综合结果成功或失败收尾。负责 Skill 状态、assistant message、trace 和 `ERROR` 等 SSE。Team 领域状态由 `team_runtime` 自己收口，不经 completion 投影。成功运行后会调度专业区更新。对话成功收尾不再自动生成 Skill。
-
-9. **`runtime_context.py` / `project_resources.py`** — Workspace / Project Phase 1 + Phase 2 的统一运行归属和资源白名单。Chat 请求只传 `project_id`，后端由 Project 反查 Workspace；现有 Session 不得跨 Project 继续。`RuntimeContext` 在 Agent 创建前解析，Project root 与 Agent filesystem scope 取交集，并传递给 TeamRun、Subagent、Memory、Trace 和 RunState。普通 Chat Agent 按 Workspace 可用，不再要求 Project Agent binding。Skill、MCP、HTTP Tool 和知识库仍按 Project binding 裁剪；Agent 配置仍是未共享 Skill 的能力上限，已启用且 `availableToAllAgents` 的 Skill 可绕过 profile 进入合格 Chat 目录。Chat 发送框 + 双栏菜单（文件 / 模式 / Agent / 技能）或输入 `/` 可另传 `forced_skill_ids`（最多 5 个）本轮强制开启：须已安装启用且过 Project binding，可临时把未绑定的未共享 Skill 并入本轮 catalog。斜杠命令留在用户原文里并高亮显示，后端从这句话里抓取，最多 5 个。正文读取与定时任务共用，把总头和各份 SKILL.md 拼成一条用户消息，禁止把 SKILL.md 灌进 system prompt，也不另写 Skill viewer。Chat 点击产物行在右侧打开预览栏：`GET /api/tools/files/preview` 返回分类与文本抽取，`GET /api/tools/files/content` 以内联 MIME 给图片 / PDF / Word 原文件；Electron 仅在 macOS / Windows 右侧栏内嵌系统预览（macOS `QLPreviewView`，Windows `IPreviewHandler`，只读，不弹系统面板，不转 soffice）；Linux 与浏览器不开放预览入口，只保留下载。嵌入失败时桌面端 Word 回退 `docx-preview`、Excel 抽表。不灌 SKILL.md，不改 Chat SSE，也不是 Artifact Phase。切换会话或新建对话时关闭预览。Phase 3 已提供统一前端 Workspace / Project 上下文，Chat、Trace、Memory 和资源管理按当前上下文隔离；独立 Runs 页由产品档 `views.runs` 控制（默认关），Chat 仍走 `/api/chat/runs`。Artifact ownership 仍留在 Artifact Phase。
-
-10. **`agents/factory.py`** — 唯一的 AgentScope 运行时构造入口。`get_or_create_agent()` 按 runtime `agent_id` 缓存实例（缓存键不含 system prompt 正文，复用时刷新 `_system_prompt`；同一 `session_context_key` 换实例时由 `agents/session_context.py` 搬运 AgentScope `state.context`，LRU 48 / 闲置 6h 淘汰，忙碌或等待用户回应的实例不淘汰）；会话历史只存在于 AgentScope `state.context`，进程重启后由 `chat_messages` 重建，禁止再把历史扁平拼进 system prompt；时间由 `InjectionConfig` HintBlock 注入，system prompt 不得写时钟；模型读过的 SKILL.md 正文由 `routes/chat/skill_context_middleware.py` 保留在会话里，截断 / 压缩 / 重建后以 `<activated-skill>` HintBlock 补回，不预注入 system prompt，也不因 `SkillRun` 每轮关闭而丢失；Chat Composer 强制开启时同样走 `activate_skill`，不要把全文写进 system prompt；定时任务 firing 在首次模型调用前把冻结 Skill 全文写入 `<activated-skill>`（用 SKILL.md 的 name），system prompt 只声明已注入，Toolkit 不注册 Skill viewer；`_create_model()` 按 `adapter` 字段分发到不同 ChatModel 类，`context_size` 取 `ModelEntry.contextSize`（0 = adapter 默认表），不得回退到 AgentScope 默认 32768；`FallbackChainModel` 是应用层多模型降级链（主模型失败逐级回退并发 `attempt`/`success`/`failure` 事件，`context_size` 取链上最小）。上下文治理在 `routes/chat/context_middleware.py`，三条 Runtime（单 Agent、TeamRun Leader / Member / 综合、群聊 Host / Worker）都通过 `routes/chat/runtime_governance.py` 挂同一套 middleware、记忆两段、`session_context_state` 落库与 `CONTEXT_USAGE` 观测，不得再各自复制一份：`ContextHygieneMiddleware` 每轮开始把早于最近 2 轮的大段工具输出 / 旧图片存根化（不动 `Skill` 正文），`ContextCompressionMiddleware` 记录 AgentScope 真正压缩事件并写 `CONTEXT_COMPRESSED` trace；`ContextConfig` 为 trigger 0.75 / reserve 0.2 / tool_result_limit 4000，summary schema 只声明模板渲染的五段且 `additionalProperties=True`。`state.summary` + `middle_context` 每轮写入 SQLite `session_context_state`，实例重建时恢复。`CONTEXT_USAGE` 的 `estimatedTokens` 必须与 AgentScope `count_tokens` 同源（bytes/4 含工具 schema），不要再引入第二套字符折算。工具集在 `_create_default_toolkit()` 注入：普通 Agent 默认拥有 Read/Grep/Glob/AskUser，Write/Edit 受权限控制；Bash/HttpRequest/WebFetch/知识库工具/MCP 受 `RuntimeToolScope` 裁剪。`WebFetch` 读取已知 HTTP(S) URL（公网、本机 loopback、RFC1918/ULA 内网），不提供 WebSearch；必须保持链路本地/云元数据、本机 API 端口、URL 凭据、重定向、响应大小和非文本内容防护。系统基础设施 Agent 可通过 `include_default_tools=False` 创建完全无工具实例。`GuardedBash` 强制执行 shell 黑名单和超时。执行环境为 `LocalWorkspace`（默认工作目录是项目根目录，避免 Glob/Grep 扫描用户主目录）或 `DockerWorkspace`。改 Agent 配置后必须调 `invalidate_agent()` 让缓存失效。
-
-11. **`agents/agentscope_usage_patch.py`** — 启动时 `patch_agentscope_usage_events()` 给 AgentScope 打补丁以捕获 usage 事件。
-
-12. **群聊工作室（Group Chat Studio）** — 独立于 Chat Team Runtime 的跨多轮协作产品，不替换、不增强一次性 `TeamRun`。入口是 Chat 顶栏按钮 / `⌘⇧G`，520ms 重叠过渡切到独立 pane，不是 Agent/Team 分段，也不是 TitleBar 第三 workspace。领域包 `backend/src/group_studio/`，路由 `/api/group-studio`，独立 SSE（`docs/group-studio-event-contract.md`，`GROUP_*` 事件；DELTA 不落库）。SQLite `group_*` 表是领域事实源；一 Chat session 最多一间未结束（`open`/`paused`）房间。状态对外 `open | paused | done`（内部另有 `deleted`）。新建 / 进群先空白画布，不进列表；第一条消息才 `from-chat` 落库为 `open`，不自动开跑。没有确认开始、没有可见 Host、没有 drafting / 阶段机。禁止用 `gstu_local_*` 假 id 打 API。人类 `POST /messages` 带 `mentions[]`（membershipId）才开会：非空按数组去重后串行各说一轮，全不可跑则 `no_eligible_speaker` 不回退全员；空 mentions 则未静音 Worker 按 `joinedAt` 升序全员一轮。说完停，不派系统角色。`maxParallelWorkers=1`。选中 Chat Agent 可作第一 Worker（`default` / Job / `group-studio-host` 不入座）。Worker 工具只留 `group_post_message`；权限固定 `PermissionMode.BYPASS`，不抄 Chat Agent 的审批设置；`group_approvals` 仅兜底，禁止写入 Chat `PENDING_INTERACTIONS`；Worker 另有 bypass 免疫的破坏性 shell 黑名单（`WORKER_SHELL_BLACKLIST`）。置顶 `pin` 可空不挡发言。界面不提供暂停 / 结束：只留输入列「停止」（清队列、房间仍 `open`）。左侧删除标 `deleted`。`close_studio(confirm=True)` 仍可把房间标 `done` 并走 `archive_memory.py`（pin + 最近工人发言，归属第一个 Worker，Host 不写记忆），但前端不再露出该按钮。通知走 `src/notifications/`，kind 前缀 `group_studio_`，点击 `openGroupStudio`，不进 Chat SSE / ResultModal。`require_agent` 跳过 `default` 与 `group-studio-host`。Chat handlers / Team Runtime 禁止 import `group_studio`；catalog 通过 `session_studio.py` 附加徽章。开关在 `json_store system_settings/group_studio`，默认 `enabled=true`。旧 `confirm-intake` / `confirm-restatement` / `start-execution` / `start-review` 返回 410。产品模型见 `docs/group-studio-v2.md`。
-
-### 持久化
-
-`backend/src/storage/database.py` 用同步 `sqlite3`（线程锁 `RLock`）封装所有存储，尽管依赖里有 `aiosqlite`。两类存储模式：
-
-- **结构化表**：`projects`、`project_folders`、`skill_overrides`、`agents`（用户正文在 profile 文件，表可为空）、`mcp_servers`、`http_tools`、`chat_sessions`、`chat_messages`、`chat_runs`、`trace_observations`（Chat Trace 一步一闭环，按 `run_id` 查询；`/api/traces` 身份是 Chat Run 不是 Session）、`run_events`（Memory 等审计，不再当 Trace 时间线）、`session_context_state`（会话级压缩摘要 + middleware 跨轮数据）、`memory_nodes`、`memory_markdown_candidates`（user / global Markdown 待确认候选）、`subagent_invocations`、`group_studios` / `group_task_cards` / `group_blackboards` / `group_memberships` / `group_messages` / `group_runs` / `group_approvals` / `group_artifacts` / `group_work_items` / `group_studio_events`。启动时创建 `slug=default` 的 Project。没有 Workspace，没有 `project_resource_bindings`。持久 Team 的 `teams` / `team_members` 表在启动时删除；历史库中可能仍残留 `memory_facts` / `memory_events` / `memory_candidates` 表，但旧记忆模块已删除，不再作为当前运行时能力。群聊工作室不恢复持久 `teams` 表。群聊步骤不写入 `trace_observations`。契约见 `docs/trace-run-observations.md`。存储归属以 `docs/context-storage-refactor.md` 为准。
-- **Markdown 记忆文件**：新记忆 MVP 使用 `backend/data/memory/users/user_memory.md`、`backend/data/memory/agents/agent_memory.md`、`backend/data/memory/global/global_memory.md` 作为默认文件；非默认 owner 使用 `users/{user_id}/user_memory.md`、`agents/{agent_id}/agent_memory.md`、`global/global_memory.md`。不兼容读取旧 `default.md`。
-- **向量存储**：全局 `VectorStoreBackend` 抽象支持 `disabled` 和 `zvec` provider。`VECTOR_STORE_PROVIDER` 只在首次初始化时生效，之后读取持久化 `VectorStorePolicy`；向量库只索引历史记忆底层表 `memory_nodes`，Markdown 记忆不进入向量库。
-- **`json_store` 表**：`(namespace, key) -> JSON`，用于系统设置等 Pydantic 文档。模型配置已迁移到 `USER_DATA_ROOT/models.json`；旧 `system_settings/model` 仅在首次迁移时读取。
-
-新库从 `schema_version = 1` 起步。加列走 `reconcile_columns()`。不要恢复 `_ensure_column`、`migrate_json_*_file`、`migrate_agents`、`assign_owners` 或 `schema_migrations`。检测到旧库或旧 `workspaces/` 时，整份封存到 `backups/legacy-<ts>/`，代码不读取。封存成功后写 `backups/legacy-notice.json`，前端只按 `GET /api/db/legacy-notice` 弹一次。桌面端可用 `yinli db reset --dev` 删除当前 `state.db`，不删除 `backups`。托管模式拒绝该命令。发布说明见 `docs/context-storage-release-note.md`。
-
-### 配置分层
-
-- `config/settings.py` — `pydantic-settings`，环境变量前缀 `AGENT_WORKSTATION_`，从 `.env` 加载。属启动期静态配置（端口、DB URL、CORS、默认 DeepSeek key）。
-- `config/product-features.json` — 打包前由管理员改的产品功能档。`views` 控制侧栏/工作台页面，`surfaces` 控制任务流、群聊工作室、Team 模式、Plan Mode。`chat` / `settings` 强制开启。前端启动后读 `GET /api/settings/product-features`，不要再写死 `OFFLINE_VIEWS`。关闭页面只藏入口并 404 对应管理 API（`/api/traces`、`/api/sandbox`、`/api/subagents`、`/api/workflows`）；**不要**因此关掉 Chat `/api/chat/runs`、Agent/Skill/MCP 执行时 API，或模型目录 `/api/settings/models`。工作台「模型」页由 `views.models` 控制入口，默认开。群聊 / 定时任务还要叠加各自的 `json_store` 运行时开关。上线建议档见 `config/product-features.packaging.example.json`。Electron 安装包把该文件打进 `extraResources`，后端读 `AGENT_WORKSTATION_PRODUCT_FEATURES_PATH`。
-- `config/model_catalog.py` — `models.json` 唯一配置源，供应商实例与模型条目使用独立 ID；Key 按用户要求保存在本地文件，API 只返回已配置标记。保存采用进程锁、内容版本校验和原子替换。`config/runtime_settings.py` 在新 Run 开始时解析完整连接，并用不可变快照贯穿 Team、Subagent、审批恢复和后台后处理。Chat/Sandbox 选择模型；Agent 只保留 ReAct 上限，不选择模型或采样参数。见 `docs/chat-model-selection-v1.md`。
-
-### 前端
-
-- `frontend/src/App.tsx` — 用 `appStore.currentView` 通过 `VIEW_PAGES` 映射表（非 switch）懒加载页面；主题用 `useLayoutEffect` 同步到 `data-theme`；每 10s 轮询 `/api/health`。
-- 状态用 Zustand（`stores/appStore.ts`、`stores/settingsStore.ts`、`stores/productFeaturesStore.ts`）。侧栏与工作台入口按产品档过滤，不再使用写死的 `OFFLINE_VIEWS`。
-- API 调用与 SSE 事件流封装在 `hooks/`（`useEventStream.ts` 等）。页面在 `pages/`，对应后端各路由域（Chat/Trace/Sandbox/Agents/Subagents/MCP/Skills/Settings）；群聊工作室是 Chat 上的独立 pane（`features/group-studio/`），不是 TitleBar 第三 workspace。消息区滚到底部按钮与滚动钩子在 `components/ScrollToBottomButton.tsx` / `components/useMessageScroll.ts`，Chat 与群聊共用。
-- Vite 把 `/api` 代理到 `localhost:8765`；`@/` 别名指向 `src/`。
-- UI 库为 `@agentscope-ai/design` + `@agentscope-ai/chat` + Ant Design，主题用 carbonTheme/carbonDarkTheme。
-
-### Electron
-
-`electron/main.ts` 开发模式连接 Vite dev server，生产模式加载 `frontend/dist` 并 spawn Python 后端子进程。`contextIsolation: true` + `nodeIntegration: false`，通过 `preload.ts` 桥接 IPC。
-
-## 约定
-
-- 开发必须遵循 `docs/development-guidelines.md`。该文件是正式开发规范，覆盖模块化、React/TypeScript、Python/FastAPI、SQLite、Agent Runtime、测试、Git 和文档要求。
-- 如果 `AGENTS.md` / `CLAUDE.md` 与 `docs/development-guidelines.md` 冲突，以更具体、更严格、更新的规范为准；不确定时先按 `docs/development-guidelines.md` 执行。
-- `AGENTS.md` 是开发代理记忆和项目协作规范的唯一真实来源；`CLAUDE.md` 只作为兼容入口，避免多份记忆漂移。
-- 当前已删除/下线的旧设计：旧记忆模块、旧独立 Plan Runtime（`runtime.kind=plan`）、旧独立 Subagent Runtime（`runtime.kind=subagent`）。当前在线能力是 ReAct 内的 Plan middleware 和 attached `DelegateTask` Subagent 文件任务；不得把“删除旧独立 Runtime”误解为删除这两项当前能力。Subagent definition 继续来自 YAML/Markdown，`DelegateTask` 只 fork，父 Agent 通过 `SubagentTaskWait` / `SubagentResultRead` join 和消费。后续不要在旧字段、旧事件或旧工具链上继续补丁式开发；记忆能力只能沿当前新方案推进，通过 hooks / tools / 后处理服务接入，不新增 `memory` Runtime 分支。
-- 新记忆系统当前状态：时间线就是 chat、群聊和定时任务的原始消息，不每轮注入。智能体用 timeline_retrieve 按工作区、项目、智能体、场合和时间查找原文，再用 timeline_ingest 把这次任务需要的内容留在当前会话，原文随后从上下文抽掉。习惯写在 users/{user}/habits.md，属于这个人，所有智能体每轮注入全文；用户消息落库后、回复前由习惯智能体判断，寒暄不跑，判定后直接写、不等确认。专业区写在 agents/{agent}/professional.md，只属于该智能体，每轮注入全文且不设长度上限；该智能体一轮落库后由专业区判断智能体决定改写、删除或不改。旧三份 Markdown 摘要、自动 recalled-memory、memory_node_tree / memory_node_query 和会话日 memory_nodes 不再是注入与回忆主路径。Skill 自进化（后台生成、手动「生成 Skill」、候选队列、SkillEvolutionAgent、skill_draft_propose）已删除，不要加回来。Memory 页面主视图是习惯、按智能体的专业区和时间线；旧 Markdown 与 memory_nodes 只读保留。设置区和 MEMORY_AUDIT 审计详情仍在。习惯判断只在这句话像偏好、语气或人设时才跑模型。
-- 在本项目 AgentScope 语境中，`middleware` 按 AgentScope hooks / `MiddlewareBase` 理解；讨论 Plan Mode 等运行时增强时，优先考虑通过 middleware hooks（如 `on_system_prompt`、`on_acting`）接入，而不是恢复旧 Runtime 分支。
-- 推进 Plan Mode 任务进度能力时，固定顺序为：先核对 SQLite/Pydantic/前端 TypeScript 数据结构，再补 `todo_write` / `task_output` / `task_list` 等工具与 Runtime Event，最后和前端流式展示、审批入口、刷新恢复一起联调。
-- 代码注释和文档用中文，技术术语和标识符保持英文。
-- TODO 文档和待办事项统一用中文编写，便于团队协作和后续交接。
-- Chat SSE 事件新增或变更前必须先更新 `docs/chat-sse-event-contract.md`，前端只依赖该契约中的稳定事件。
-- 文件均带中文 docstring 说明职责，遵循既有风格。
-- 前端遵循若干约定（见 `App.tsx` 注释）：派生状态不用 effect、对象映射表代替 switch、初始化只做一次。
-- 文档入口见 `docs/README.md`；当前架构见 `docs/architecture-overview.md`（含通知与 Windows 数据目录）；文件 catalog 见 `docs/file-catalog-v1.md`；记忆模块重设计见 `docs/memory-system-design.md`；项目现状与待办见 `docs/project-progress-handoff.md` 和 `docs/project-todo.md`；开发规范见 `docs/development-guidelines.md`。
-- 持久 Agent 定义权威是 `<USER_DATA_ROOT>/workspaces/<workspace_id>/.agents/profiles/<id>.md`。`get_registered_agent` 读 catalog；禁止再把用户 Agent 正文 upsert 进 sqlite。Skill 正文只来自 `SKILL.md`；项目 `.agents/skills` 免 Project binding。已启用且 `availableToAllAgents`（缺省 true）的包进入单 Agent / Sandbox / Team Leader 目录，不必写进 Agent `skills:`；关掉开关后仍须手动绑定。只有 `yinli-catalog` 说明书锁定共享。Job / 群聊 Worker·Host / Team Member / 无工具基础设施 Agent 不因开关自动拿 Skill。MCP/HTTP 定义是 `.agents/mcp/*.yaml` 与 `.agents/tools/*.yaml`，密钥只引用 `secret:`，不进 YAML。Job 定义是 `.agents/jobs/<id>.md`（Workspace catalog 或项目目录）；`scheduled_jobs` 表只保留运行实例。交互式单 Agent Chat 注入 `ScheduleJob` / `ListJobs` / `PauseJob` / `ConfirmJob` / `CheckJobFeasibility` 登记工具（Team 与 firing 不注入），写库时同步落文件。禁止再新增另一套系统 CRUD 工具。
-- 消息通知走 `src/notifications/` 通道抽象：定时任务终态由 `scheduler/notifications.py` 适配后交给分发器。当前只实现应用内 inbox（Chat 顶栏设置左侧铃铛 + `/api/notifications/stream`）。任务完成时 Web 弹出右上角提醒框，Electron 客户端走系统通知。邮箱 / 微信 / 飞书是占位通道，不得假装已投递。禁止把通知写入 Chat SSE。`kind` 以 `group_studio_` 开头的通知点击后 `openGroupStudio`，不进 ResultModal。
-- 群聊工作室是独立产品，不是 Chat Team Runtime 的第三 mode。后续不要把工作室能力补丁回 `POST /api/chat/send`、`RUNTIME_EVENT` 或持久 `teams` 表。现行事实以 `docs/group-studio-v2.md`、`docs/architecture-overview.md`「群聊工作室」和 `docs/group-studio-event-contract.md` 为准。不要恢复可见 Host、intake、阶段机、工作项或确认开始。
-- 定时任务执行者必须是 Job Agent（`role=job`），不能在 Chat 里选用。Job Agent 有必注入 / 可选注入两层工具；`CheckJobFeasibility` 只认领可选层，必注入到期一定带上。系统 `default` 助手不能改成 Job Agent。系统内置 `system-websearch-job`（名称 `WebSearch`）作为跨 Workspace 可用的默认 Job Agent，必注入 `WebFetch` / `HttpRequest`，不可删除或改为 Chat Agent；只豁免 Agent 自身的 Project binding，外部 Skill / MCP / HTTP Tool 仍按 Project 白名单裁剪。`WebFetch` 读取已知 HTTP(S) URL（含本机与内网），不等同于真正的 WebSearch。建立或改 `agentId` 时无论 `capability_gate` 是否开启都要校验执行者仍在（不存在则 422），门禁关闭仍不跑完整可行性、不因此要求必须是 Job Agent。
+- [docs/architecture-overview.md](docs/architecture-overview.md)
+- [docs/development-guidelines.md](docs/development-guidelines.md)
+- [docs/file-catalog-v1.md](docs/file-catalog-v1.md)
+- [docs/context-storage-refactor.md](docs/context-storage-refactor.md)

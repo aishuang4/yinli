@@ -21,8 +21,8 @@ from src.scheduler.settings import (
     set_scheduled_jobs_enabled,
     set_scheduled_jobs_settings,
 )
-from src.storage import database
-from src.storage.database import ensure_db
+from src.storage.engine import database
+from src.storage.engine.database import ensure_db
 
 
 @pytest.fixture()

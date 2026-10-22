@@ -1,14 +1,20 @@
 """待确认 Markdown 记忆候选：存储、API 采纳 / 拒绝。"""
-
 from __future__ import annotations
+
+from src.storage.records.memory_markdown_candidates import set_memory_markdown_candidate_status
+from src.storage.records.memory_markdown_candidates import count_pending_memory_markdown_candidates
+from src.storage.records.memory_markdown_candidates import list_memory_markdown_candidates
+from src.storage.records.memory_markdown_candidates import find_pending_memory_markdown_candidate
+from src.storage.records.memory_markdown_candidates import create_memory_markdown_candidate
+
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.memory.markdown_store import MarkdownMemoryStore
+from src.memory.legacy.markdown_files import LegacyMarkdownStore
 from src.server.routes import memory as memory_routes
-from src.storage import database
+from src.storage.engine import database
 
 
 @pytest.fixture()
@@ -22,8 +28,8 @@ def client(isolated_db, tmp_path, monkeypatch):
     database.ensure_db()
     # 让候选采纳写到临时目录，而不是开发机的真实记忆文件。
     monkeypatch.setattr(
-        "src.memory.markdown_reflection.MarkdownMemoryStore",
-        lambda: MarkdownMemoryStore(root=tmp_path / "memory"),
+        "src.memory.legacy.markdown_reflection.LegacyMarkdownStore",
+        lambda: LegacyMarkdownStore(root=tmp_path / "memory"),
     )
     app = FastAPI()
     app.include_router(memory_routes.router, prefix="/api/memory")
@@ -46,22 +52,22 @@ def _candidate(**overrides) -> dict:
         "sourceRunId": "run-1",
     }
     payload.update(overrides)
-    return database.create_memory_markdown_candidate(payload)
+    return create_memory_markdown_candidate(payload)
 
 
 def test_store_round_trip_and_pending_dedupe(isolated_db) -> None:
     created = _candidate()
     assert created["status"] == "pending"
-    assert database.count_pending_memory_markdown_candidates() == 1
-    assert database.find_pending_memory_markdown_candidate(scope="user", owner_id="default", note="回答默认用中文。", exact_text="")
-    assert database.list_memory_markdown_candidates(status="pending")[0]["id"] == created["id"]
-    assert database.list_memory_markdown_candidates(status="pending", scope="agent") == []
+    assert count_pending_memory_markdown_candidates() == 1
+    assert find_pending_memory_markdown_candidate(scope="user", owner_id="default", note="回答默认用中文。", exact_text="")
+    assert list_memory_markdown_candidates(status="pending")[0]["id"] == created["id"]
+    assert list_memory_markdown_candidates(status="pending", scope="agent") == []
 
-    updated = database.set_memory_markdown_candidate_status(created["id"], status="rejected", resolution="不需要")
+    updated = set_memory_markdown_candidate_status(created["id"], status="rejected", resolution="不需要")
     assert updated["status"] == "rejected" and updated["resolution"] == "不需要"
-    assert database.count_pending_memory_markdown_candidates() == 0
+    assert count_pending_memory_markdown_candidates() == 0
     with pytest.raises(ValueError):
-        database.set_memory_markdown_candidate_status(created["id"], status="bogus")
+        set_memory_markdown_candidate_status(created["id"], status="bogus")
 
 
 def test_api_accept_writes_markdown_and_reject_keeps_file_untouched(client, tmp_path) -> None:

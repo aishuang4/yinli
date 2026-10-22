@@ -1,6 +1,6 @@
 """通知通道抽象、应用内 inbox、设置与独立 SSE。"""
-
 from __future__ import annotations
+
 
 import asyncio
 
@@ -15,13 +15,13 @@ from src.notifications.models import NotificationMessage
 from src.notifications.stream import notification_event_stream
 from src.scheduler.notifications import create_notification
 from src.server.routes import notifications
-from src.storage import database
-from src.storage.database import (
+from src.storage.engine import database
+from src.storage.engine.database import (
     DEFAULT_PROJECT_ID,
     DEFAULT_WORKSPACE_ID,
     ensure_db,
-    list_user_notifications,
 )
+from src.storage.records.scheduled_job_records import list_user_notifications
 
 
 @pytest.fixture()

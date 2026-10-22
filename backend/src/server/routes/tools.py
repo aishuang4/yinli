@@ -12,23 +12,27 @@ from pydantic import BaseModel, Field, field_validator
 
 from src.generated_file_preview import build_preview_payload, guess_media_type
 
-from src.catalog.http_files import HttpToolFileRecord, discover_http_files, runtime_auth_config, write_http_file
+from src.catalog.http_files import HttpToolFileRecord, discover_http_files, write_http_file
 from src.catalog.migrate_mcp_http import ensure_http_file_catalog, is_http_catalog_migrated
 from src.config.runtime_paths import tenant_root
-from src.catalog.secrets import delete_named_secret, redact_headers, resolve_headers
+from src.catalog.secrets import delete_named_secret, load_http_auth, redact_headers, resolve_headers, store_http_auth
 from src.scheduler.service import ScheduledJobService
 from src.server.routes.agents import remove_knowledge_tools_from_agents
 from src.project_files import resolve_project_session_artifact
-from src.storage.database import (
-    delete_json_record,
+from src.storage.records.resource_catalog_records import (
     delete_http_tool as db_delete_http_tool,
-    get_chat_session_location,
-    get_project,
     list_http_tools as db_list_http_tools,
+)
+from src.storage.config.json_document_store import (
+    delete_json_record,
     list_json_records,
-    upsert_http_tool,
     upsert_json_record,
 )
+from src.storage.records.project_records import (
+    get_chat_session_location,
+    get_project,
+)
+from src.storage.records.resource_catalog_records import upsert_http_tool
 from src.tools.configured_http_tool import execute_configured_http_tool
 
 
@@ -227,7 +231,7 @@ def get_enabled_knowledge_tools(tool_ids: list[str]) -> list[dict[str, Any]]:
 
 def _http_response_from_file(record: HttpToolFileRecord, *, for_runtime: bool) -> HttpToolResponse:
     headers = resolve_headers(record.headers, record.header_refs) if for_runtime else redact_headers(record.headers)
-    auth_config = runtime_auth_config(record) if for_runtime else {}
+    auth_config = load_http_auth(record.auth_ref) if for_runtime else {}
     return HttpToolResponse.model_validate({
         "id": record.id,
         "name": record.name,
@@ -535,10 +539,10 @@ async def create_http_tool_config(data: HttpToolCreate) -> HttpToolResponse:
             created_at=now,
             updated_at=now,
         )
+        file_record.auth_ref = store_http_auth(file_record.id, dict(record.get("authConfig") or {}))
         write_http_file(
             tenant_root() / "tools" / f"{file_record.id}.yaml",
             file_record,
-            auth_config=dict(record.get("authConfig") or {}),
         )
         return _http_response_from_file(file_record, for_runtime=False)
     return HttpToolResponse.model_validate(upsert_http_tool(record))
@@ -577,10 +581,10 @@ async def update_http_tool_config(tool_id: str, data: HttpToolUpdate) -> HttpToo
             updated_at=str(next_data.get("updatedAt") or ""),
         )
         incoming_auth = data.auth_config if data.auth_config is not None else existing.auth_config
+        file_record.auth_ref = store_http_auth(file_record.id, dict(incoming_auth or {}))
         write_http_file(
             tenant_root() / "tools" / f"{file_record.id}.yaml",
             file_record,
-            auth_config=dict(incoming_auth or {}),
         )
         return _http_response_from_file(file_record, for_runtime=False)
     return HttpToolResponse.model_validate(upsert_http_tool(next_data))

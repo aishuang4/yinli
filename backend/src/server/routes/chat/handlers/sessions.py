@@ -19,17 +19,17 @@ from src.server.routes.chat.team_runtime.maintenance import (
     delete_team_runs_for_session,
 )
 from src.server.routes.chat.team_runtime.store import TeamStoreError
-from src.storage.database import (
-    DEFAULT_PROJECT_ID,
+from src.storage.engine.database import DEFAULT_PROJECT_ID
+from src.storage.records.chat_run_records import get_chat_run
+from src.storage.records.chat_session_records import (
     delete_chat_session,
-    delete_session_context_state,
-    get_chat_run,
     get_chat_session,
-    get_project,
     list_chat_messages,
     list_chat_sessions,
     update_chat_session,
 )
+from src.storage.records.project_records import get_project
+from src.storage.records.session_context_state import delete_session_context_state
 
 _SESSION_KINDS = {"chat", "scheduled_job", "all"}
 
@@ -49,7 +49,7 @@ class SessionApprovalUpdate(BaseModel):
 async def update_session_model(session_id: str, data: SessionModelUpdate,
     project_slug: str = Query(default=DEFAULT_PROJECT_ID, alias="projectSlug")) -> dict:
     from src.config.runtime_settings import resolve_model_binding
-    from src.storage.database import list_chat_runs_by_statuses
+    from src.storage.records.chat_run_records import list_chat_runs_by_statuses
     from src.server.routes.chat.lifecycle import ACTIVE_RUN_STATUSES
     if any(run["sessionId"] == session_id for run in list_chat_runs_by_statuses(ACTIVE_RUN_STATUSES)):
         raise HTTPException(status_code=409, detail="当前会话仍有运行或待审批任务。")

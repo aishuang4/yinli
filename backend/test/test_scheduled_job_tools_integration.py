@@ -1,6 +1,6 @@
 """ScheduleJob / PauseJob 工具层集成回归：pending→REST confirm、Pause 同 Job、AskUser 不激活。"""
-
 from __future__ import annotations
+
 
 import asyncio
 import json
@@ -16,8 +16,12 @@ from src.server.routes import scheduled_jobs
 from src.server.routes.chat.handlers.resume import resume_interaction_events
 from src.server.routes.chat.hitl import PENDING_AGENTS, PENDING_INTERACTIONS, _create_pending_interaction
 from src.server.routes.chat.models import ChatResumeRequest
-from src.storage import database
-from src.storage.database import DEFAULT_PROJECT_ID, DEFAULT_WORKSPACE_ID, ensure_db
+from src.storage.engine import database
+from src.storage.engine.database import (
+    DEFAULT_PROJECT_ID,
+    DEFAULT_WORKSPACE_ID,
+    ensure_db,
+)
 from src.tools.scheduled_job_tools import ASKUSER_DELIVERY_OPTIONS, build_scheduled_job_tools
 
 

@@ -1,12 +1,15 @@
 """通知通道运行时设置。持久化在 json_store，不存放投递密钥。"""
-
 from __future__ import annotations
+
 
 from typing import Any
 
 from src.config.runtime_settings import SYSTEM_SETTINGS_NAMESPACE
 from src.notifications.models import ChannelConfigField, ChannelSpec
-from src.storage.database import get_json_record, upsert_json_record
+from src.storage.config.json_document_store import (
+    get_json_record,
+    upsert_json_record,
+)
 
 NOTIFICATIONS_SETTINGS_KEY = "notifications"
 

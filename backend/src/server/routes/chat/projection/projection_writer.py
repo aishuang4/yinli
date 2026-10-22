@@ -61,7 +61,7 @@ class ProjectionStreamStore:
         checkpoint_seconds: float = 2.0,
     ) -> None:
         if ensure_db is None or connect is None or lock is None:
-            from src.storage import database
+            from src.storage.engine import database
 
             ensure_db = ensure_db or database.ensure_db
             connect = connect or database._connect

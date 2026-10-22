@@ -1,6 +1,6 @@
 """Skill「所有 Agent 可用」开关的存储、覆盖与 API。"""
-
 from __future__ import annotations
+
 
 import asyncio
 import sqlite3
@@ -9,7 +9,8 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
-from src.storage import database
+from src.skills.registry import cached_skill_records, write_skill_packages
+from src.storage.engine import database
 
 
 @pytest.fixture
@@ -39,15 +40,15 @@ def _skill_payload(**overrides) -> dict:
 
 
 def test_replace_skills_defaults_share_true(isolated_db) -> None:
-    database.replace_skills({"demo-share": _skill_payload()})
-    row = next(item for item in database.list_skills() if item["id"] == "demo-share")
+    write_skill_packages({"demo-share": _skill_payload()})
+    row = next(item for item in cached_skill_records() if item["id"] == "demo-share")
     assert row["availableToAllAgents"] is True
     assert "should-not-persist" in row["content"]
 
 
 def test_replace_skills_round_trips_share_false(isolated_db) -> None:
-    database.replace_skills({"demo-share": _skill_payload(availableToAllAgents=False, content="")})
-    row = next(item for item in database.list_skills() if item["id"] == "demo-share")
+    write_skill_packages({"demo-share": _skill_payload(availableToAllAgents=False, content="")})
+    row = next(item for item in cached_skill_records() if item["id"] == "demo-share")
     assert row["availableToAllAgents"] is False
 
 
@@ -93,7 +94,7 @@ def test_legacy_skills_table_without_share_column_defaults_true(tmp_path, monkey
         "sqlite+aiosqlite:///" + str(db_path),
     )
     database.forget_db(db_path)
-    rows = database.list_skills()
+    rows = cached_skill_records()
     assert all(row["id"] != "legacy-skill" for row in rows)
     conn = sqlite3.connect(db_path)
     assert conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='skills'").fetchone() is None
@@ -103,7 +104,7 @@ def test_legacy_skills_table_without_share_column_defaults_true(tmp_path, monkey
 def test_save_user_skills_reloads_share_from_package(isolated_db) -> None:
     from src.server.routes.skills import _save_user_skills
 
-    database.replace_skills({
+    write_skill_packages({
         "user-share-flag": _skill_payload(
             id="user-share-flag",
             name="User Share",
@@ -112,7 +113,7 @@ def test_save_user_skills_reloads_share_from_package(isolated_db) -> None:
         ),
     })
     _save_user_skills()
-    stored = next(item for item in database.list_skills() if item["id"] == "user-share-flag")
+    stored = next(item for item in cached_skill_records() if item["id"] == "user-share-flag")
     assert stored["availableToAllAgents"] is False
     assert "正文留在 SKILL.md" in stored["content"]
 
@@ -151,7 +152,7 @@ def test_share_toggle_and_disable_drops_installed_lookup(isolated_db) -> None:
         set_skill_shared,
     )
 
-    database.replace_skills({
+    write_skill_packages({
         "toggle-share-lookup": _skill_payload(
             id="toggle-share-lookup",
             name="Toggle",

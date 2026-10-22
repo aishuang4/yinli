@@ -13,7 +13,7 @@ from src.security.permissions import (
     PermissionDecision,
     ResourceType,
 )
-from src.storage.database import append_run_event
+from src.storage.records.trace_records import append_run_event
 
 from src.project_files import is_user_facing_session_artifact
 from src.server.routes.chat.helpers import _trim_text

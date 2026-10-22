@@ -6,10 +6,13 @@
 - `orchestrator`：状态硬规则，不进群、不调模型
 - `speaker_queue`：从 mentions 算队列，不解析正文 @
 - `scheduler`：只串行点火 Worker，说完停
-- `service`：人类 API 编排（进群、拉人、发言、暂停、结束）
-- `worker_runtime` / `tools_worker`：工人一轮生成；工具只留 `group_post_message`
+- `rooms`：进群、读取、暂停、结束、置顶和改模型
+- `members`：拉人、静音、移出
+- `speaking`：人类发言、打断、重跑和系统提示
+- `artifacts` / `files`：产物登记和会话目录
+- `worker_spec`：构造 Worker。`worker_runtime` / `tools_worker`：跑一轮；工具只留 `group_post_message`
 - `lifecycle` / `circuit`：启动对账、删除 session、熔断
-- `storage/group_studio_records`：SQLite 读写，不写 Chat 表
+- `storage/records/group_studio_records`：SQLite 读写，不写 Chat 表
 
 V1 主持/阶段机模块（`host_runtime`、`tools_host`、`workboard`、
 `intake`、`blackboard`）已删除，不要恢复。

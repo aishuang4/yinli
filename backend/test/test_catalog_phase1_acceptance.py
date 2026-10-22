@@ -1,6 +1,8 @@
 """docs/file-catalog-v1.md §19 第一期验收。"""
-
 from __future__ import annotations
+
+from src.storage.records.resource_catalog_records import list_agents
+
 
 import asyncio
 
@@ -15,7 +17,7 @@ from src.server.routes import agents as agents_routes
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.run_context import resolve_agent_system_prompt
 from src.server.routes.chat.runtime_builder import build_runtime_agent_cache_key
-from src.storage import database
+from src.storage.engine import database
 from src.tools.scoped_edit import ScopedEdit
 from src.tools.scoped_paths import resolve_workspace_path
 from src.tools.scoped_read import ScopedRead
@@ -55,7 +57,7 @@ def test_phase1_sqlite_empty_file_exists_and_page_save_writes_file(phase1_root) 
     path = profile_path("default", created.id)
     assert path.is_file()
     assert "第一期提示词" in path.read_text(encoding="utf-8")
-    assert all(row["id"] != created.id for row in database.list_agents())
+    assert all(row["id"] != created.id for row in list_agents())
 
     listed = asyncio.run(agents_routes.list_agents())
     assert any(item.id == created.id for item in listed)
@@ -65,7 +67,7 @@ def test_phase1_sqlite_empty_file_exists_and_page_save_writes_file(phase1_root) 
         agents_routes.AgentUpdate(system_prompt="页面保存后的提示词"),
     ))
     assert "页面保存后的提示词" in path.read_text(encoding="utf-8")
-    assert all(row["id"] != created.id for row in database.list_agents())
+    assert all(row["id"] != created.id for row in list_agents())
 
 
 def test_phase1_chat_reads_index_and_edit_changes_next_round(phase1_root) -> None:

@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from src.server.main import app
 from src.server.routes.agent_builder import BuilderPlanRequest
-from src.storage import database
+from src.storage.engine import database
 
 
 def test_persistent_team_api_is_not_registered() -> None:

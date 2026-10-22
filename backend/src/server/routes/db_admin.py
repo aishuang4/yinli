@@ -6,9 +6,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from src.config.settings import settings
 from src.server.auth.routes import require_admin
 from src.config.runtime_paths import data_root
-from src.storage.legacy_archive import acknowledge_legacy_notice, pending_legacy_notice
-from src.storage.maintenance import backup, health, recover
-from src.storage.sqlite_tx import StorageLocked
+from src.storage.engine.legacy_archive import acknowledge_legacy_notice, pending_legacy_notice
+from src.storage.engine.maintenance import backup, health, recover
+from src.storage.engine.sqlite_tx import StorageLocked
 
 router = APIRouter(prefix="/api/db", tags=["数据库维护"])
 

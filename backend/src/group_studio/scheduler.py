@@ -1,6 +1,6 @@
 """发言调度：人类点名后只串行跑 Worker，说完停。"""
-
 from __future__ import annotations
+
 
 import asyncio
 import logging
@@ -9,7 +9,7 @@ import os
 from src.group_studio.events import emit_envelope
 from src.group_studio.speaker_queue import get_queue, pop_unrunnable_head, set_queue
 from src.group_studio.worker_runtime import run_worker_turn
-from src.storage.database import (
+from src.storage.records.group_studio_records import (
     get_group_studio_snapshot,
     set_group_studio_current_run_id,
     update_group_studio_run_status,

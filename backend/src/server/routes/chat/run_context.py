@@ -39,7 +39,7 @@ from src.server.routes.chat.prompts import (
     build_stacked_skill_user_message,
 )
 from src.server.routes.chat.store import message_model
-from src.storage.database import list_chat_messages
+from src.storage.records.chat_session_records import list_chat_messages
 from src.server.routes.chat.runtime import (
     _build_runtime_guardrails,
     _build_runtime_knowledge_tools,
@@ -70,7 +70,7 @@ from src.server.routes.skills import (
     list_skill_usage_details,
     resolve_runtime_skill_paths,
 )
-from src.storage.database import get_project
+from src.storage.records.project_records import get_project
 
 
 @dataclass
@@ -625,7 +625,7 @@ def _previous_result_prompt(job: Any) -> str:
     session_id = str(getattr(job, "created_from_session_id", "") or "")
     if not session_id:
         return ""
-    from src.storage.database import get_latest_assistant_chat_message
+    from src.storage.records.chat_session_records import get_latest_assistant_chat_message
 
     record = get_latest_assistant_chat_message(session_id)
     text = str((record or {}).get("content") or "").strip()

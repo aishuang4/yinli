@@ -1,20 +1,20 @@
 """父 Run、子執行者與 Job 重跑共用一條授權鏈。"""
 
+from src.storage.records.chat_run_records import update_chat_run_status
+from src.storage.records.chat_run_records import upsert_chat_run
+
 from datetime import datetime, timezone
 from uuid import uuid4
 
 import pytest
 
 from src.agents.permission_adapter import PlatformAgent
-from src.runtime.authorization import (
-    RunAuthorization,
-    inherit_child_authorization,
-    open_run_binding,
-)
+from src.catalog.loader import import_sqlite_agent_record
+from src.runtime.authorization import RunAuthorization, inherit_child_authorization, open_run_binding
 from src.security.authorization.models import AuthorizationDecision
 from src.security.authorization.risk import classify_risk
-from src.storage import database
-from src.storage.permission_records import PermissionRecordStore
+from src.storage.engine import database
+from src.storage.records.permission_records import PermissionRecordStore
 from agentscope.message import ToolCallBlock
 
 from src.tools.scoped_read import ScopedRead
@@ -80,7 +80,7 @@ def test_finished_run_permission_cannot_authorize_the_next_job_run():
     store = PermissionRecordStore()
     first = action_for(approvalMode="full_access")
     second_owner = first.authorization.model_copy(update={"run_id": "run-next", "actor_id": "job"})
-    database.upsert_chat_run({
+    upsert_chat_run({
         "id": second_owner.run_id, "projectSlug": "p", "sessionId": "s", "status": "running",
     })
     allowed = AuthorizationDecision(
@@ -91,17 +91,18 @@ def test_finished_run_permission_cannot_authorize_the_next_job_run():
     second = first.model_copy(update={"authorization": second_owner, "call_id": "next-call"})
     with pytest.raises(ValueError, match="归属"):
         store.reserve(second, saved.id)
-    database.update_chat_run_status(first.authorization.run_id, "succeeded")
+    update_chat_run_status(first.authorization.run_id, "succeeded")
     with pytest.raises(ValueError, match="执行行动已变化"):
         store.reserve(first, saved.id)
 
 
 def test_manual_rerun_creates_a_new_firing(isolated_db):
     from src.scheduler.service import ScheduledJobService
-    from src.storage.database import DEFAULT_PROJECT_ID, DEFAULT_WORKSPACE_ID, ensure_db, upsert_agent
+    from src.storage.engine.database import DEFAULT_PROJECT_ID, DEFAULT_WORKSPACE_ID, ensure_db
+    from src.catalog.loader import import_sqlite_agent_record
 
     ensure_db()
-    upsert_agent({
+    import_sqlite_agent_record({
         "id": "agent-1", "name": "agent-1", "system_prompt": "prompt",
          "status": "idle",
     })
@@ -146,7 +147,7 @@ async def test_readonly_tool_uses_one_execution_function_in_every_mode(tmp_path,
     monkeypatch.setattr(ScopedRead, "__call__", wrapped)
     for mode in ("manual", "model_review", "full_access"):
         run_id = f"read-{mode}"
-        database.upsert_chat_run({
+        upsert_chat_run({
             "id": run_id, "projectSlug": "p", "sessionId": "s", "status": "running",
             "authorization": {
                 "schemaVersion": 1, "tenantId": "local", "approvalMode": mode, "reviewerConfigVersion": "",

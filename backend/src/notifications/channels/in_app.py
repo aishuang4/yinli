@@ -1,12 +1,12 @@
 """应用内通知通道：写入 SQLite 并向订阅中心推送。"""
-
 from __future__ import annotations
+
 
 from src.notifications.hub import notification_hub
 from src.notifications.inbox import serialize_notification, unread_count
 from src.notifications.models import ChannelDeliveryResult, NotificationMessage
 from src.notifications.protocol import NotificationChannel
-from src.storage.database import insert_user_notification
+from src.storage.records.scheduled_job_records import insert_user_notification
 
 
 class InAppNotificationChannel(NotificationChannel):

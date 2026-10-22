@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from src.storage.timeline_records import list_timeline_neighbors, search_timeline_messages
+from src.storage.records.timeline_records import list_timeline_neighbors, search_timeline_messages
 
 TIMELINE_HIT_LIMIT = 12
 TIMELINE_NEIGHBOR_EACH_SIDE = 20

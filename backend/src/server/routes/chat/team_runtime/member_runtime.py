@@ -24,10 +24,10 @@ from src.server.routes.chat.runtime_events import (
     agentscope_reply_finished_reason,
 )
 from src.server.routes.chat.runtime_builder import build_main_agent_runtime_spec, create_main_agent_from_spec
+from src.runtime.model_call_trace import observe_model_call_event
 from src.server.routes.chat.runtime_governance import (
     build_context_governance_middlewares,
     build_actor_memory_prompt,
-    observe_model_call_event,
     prepare_agent_governance,
 )
 from src.server.routes.chat.team_runtime.store import (

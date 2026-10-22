@@ -1,18 +1,18 @@
 """Chat Trace：按一次 Run 列出 Observation，不再用 Session 或 run_events 当主数据。"""
-
 from __future__ import annotations
+
 
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from src.storage.database import (
-    DEFAULT_PROJECT_ID,
+from src.storage.engine.database import DEFAULT_PROJECT_ID
+from src.storage.records.chat_run_records import (
     get_chat_run,
     list_chat_runs,
-    list_trace_observations,
 )
+from src.storage.records.observation_records import list_trace_observations
 
 router = APIRouter()
 

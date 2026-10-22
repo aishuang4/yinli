@@ -493,7 +493,7 @@ def _load_observation(observation_id: str | None) -> dict[str, Any]:
     if not observation_id:
         return {}
     try:
-        from src.storage.database import get_trace_observation
+        from src.storage.records.observation_records import get_trace_observation
     except Exception as exc:
         print(f"[TraceObservation] load failed id={observation_id}: {exc}")
         return {}
@@ -577,7 +577,7 @@ def _close_remaining_open(*, persist: bool, run_id: str, status: str) -> None:
     if not persist or not run_id:
         return
     try:
-        from src.storage.database import list_trace_observations
+        from src.storage.records.observation_records import list_trace_observations
     except Exception as exc:
         print(f"[TraceObservation] list remaining failed run={run_id}: {exc}")
         return
@@ -625,7 +625,7 @@ def _review_trace_facts(decisions: object) -> list[dict]:
         execution = None
         if item.get("executionId"):
             execution = {"id": item.get("executionId"), "status": item.get("executionStatus")}
-        from src.storage.permission_records import project_permission_fact
+        from src.storage.records.permission_records import project_permission_fact
         projected = project_permission_fact(
             verdict=str(item.get("verdict") or ""),
             approval_status=str(item.get("status") or "") or None,

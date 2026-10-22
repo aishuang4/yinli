@@ -1,6 +1,6 @@
 """群聊工作室领域事件：持久化非 DELTA，并推送到 SSE 枢纽。"""
-
 from __future__ import annotations
+
 
 import asyncio
 import uuid
@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.group_studio.stream import publish
-from src.storage.database import (
+from src.storage.records.group_studio_records import (
     append_group_studio_event,
     get_group_studio_snapshot,
 )

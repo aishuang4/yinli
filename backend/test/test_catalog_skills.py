@@ -6,7 +6,7 @@ import pytest
 
 from src.catalog.skills import project_skill_refs, read_package_markdown
 from src.server.routes.skills import SkillRegisterRequest, register_user_skill
-from src.storage import database
+from src.skills.registry import cached_skill_records
 
 
 def test_register_user_skill_does_not_persist_body(tmp_path, monkeypatch) -> None:
@@ -19,7 +19,7 @@ def test_register_user_skill_does_not_persist_body(tmp_path, monkeypatch) -> Non
         description="文件权威",
         content="只应出现在 SKILL.md",
     ))
-    rows = [row for row in database.list_skills() if row["id"] == skill.id]
+    rows = [row for row in cached_skill_records() if row["id"] == skill.id]
     assert rows
     assert "只应出现在 SKILL.md" in rows[0]["content"]
     markdown = read_package_markdown(skill.resource_path)

@@ -1,6 +1,8 @@
 """桌面端运行时可写路径回归测试。"""
-
 from __future__ import annotations
+
+from src.storage.records.project_records import get_project
+
 
 import json
 import os
@@ -25,7 +27,7 @@ from src.config.model_catalog import models_path
 from src.config.secret_store import secret_dir
 from src.memory.markdown_store import MarkdownMemoryStore
 from src.server.routes.chat.models import chat_data_path
-from src.storage.database import db_path
+from src.storage.engine.database import db_path
 from src.vector_store.providers.zvec import ZvecVectorStoreBackend
 
 print(json.dumps({
@@ -89,7 +91,7 @@ def test_ephemeral_desktop_defaults_migrate_to_stable_workspace(monkeypatch) -> 
     """历史打包版写入的临时路径会迁移，用户自定义外部路径不受影响。"""
 
     from src.config import runtime_paths
-    from src.storage import database
+    from src.storage.engine import database
 
     monkeypatch.setattr(runtime_paths, "USING_CUSTOM_DATA_ROOT", True)
     stable_root = runtime_paths.project_default_root(database.DEFAULT_PROJECT_ID)
@@ -105,7 +107,7 @@ def test_ephemeral_desktop_defaults_migrate_to_stable_workspace(monkeypatch) -> 
     database.forget_db(database.db_path())
     database.ensure_db()
 
-    assert database.get_project(database.DEFAULT_PROJECT_ID)["primaryPath"] == str(stable_root.resolve())
+    assert get_project(database.DEFAULT_PROJECT_ID)["primaryPath"] == str(stable_root.resolve())
     normalized = database._normalize_guardrails({
         "filesystem_scope": "/private/tmp/_MEIold/runtime",
     })
@@ -121,7 +123,7 @@ def test_ephemeral_desktop_defaults_migrate_to_stable_workspace(monkeypatch) -> 
     database.forget_db(database.db_path())
     database.ensure_db()
 
-    assert database.get_project(database.DEFAULT_PROJECT_ID)["primaryPath"] == str(stable_root.resolve())
+    assert get_project(database.DEFAULT_PROJECT_ID)["primaryPath"] == str(stable_root.resolve())
     custom_root = runtime_paths.USER_DATA_ROOT / "external-project"
     normalized_custom = database._normalize_guardrails({
         "filesystem_scope": str(custom_root),

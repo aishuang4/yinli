@@ -18,7 +18,7 @@ from src.server.auth.cloud_client import (
     save_account,
 )
 from src.server.auth.desktop_account import account_path
-from src.storage import auth_records
+from src.storage.control import auth_records
 
 pytest_plugins = ["test.hosted_support"]
 
@@ -75,7 +75,7 @@ def test_desktop_session_slides_for_thirty_days(hosted_env):
     auth_records.touch_session(created["id"])
     second = auth_records.get_session_by_token("desktop-token")
     assert second is not None
-    from src.storage.auth_records import _parse
+    from src.storage.control.auth_records import _parse
 
     span = _parse(second["expiresAt"]) - _parse(first["expiresAt"])
     assert span >= timedelta(0)

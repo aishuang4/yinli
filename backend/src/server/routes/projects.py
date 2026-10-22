@@ -5,7 +5,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from src.storage.database import (
+from src.storage.records.project_records import (
     add_project_folder,
     create_project,
     delete_project,
@@ -14,7 +14,7 @@ from src.storage.database import (
     remove_project_folder,
     update_project,
 )
-from src.storage.project_records import ProjectNameError, assert_directory_grant
+from src.storage.records.project_records import ProjectNameError, assert_directory_grant
 from src.tenancy.context import is_hosted_mode
 
 

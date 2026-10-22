@@ -313,7 +313,7 @@ def reconcile_interrupted_file_tasks(project_roots: list[Path]) -> int:
                 message = "Backend restarted before the attached Subagent task reached a terminal result."
                 store.write_result(invocation_id, "", error=message)
                 interrupted = store.set_status(invocation_id, "interrupted", error=message)
-                from src.storage.database import update_subagent_invocation_delivery
+                from src.storage.records.trace_records import update_subagent_invocation_delivery
 
                 update_subagent_invocation_delivery(
                     invocation_id,

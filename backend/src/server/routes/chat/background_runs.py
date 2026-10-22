@@ -1,6 +1,8 @@
 """基于 Event Stream V3 Projection 的后台 Chat Run 管理。"""
-
 from __future__ import annotations
+
+from src.storage.records.chat_run_records import update_chat_run_status
+
 
 import asyncio
 import json
@@ -39,7 +41,7 @@ from src.server.routes.chat.observation_runtime import (
     observe_source_event,
     open_run_root,
 )
-from src.storage.database import (
+from src.storage.records.chat_run_records import (
     get_chat_run,
     list_chat_runs,
     list_chat_runs_by_statuses,
@@ -135,7 +137,7 @@ def reconcile_interrupted_chat_runs() -> int:
         if not run_id or has_live_chat_background_task(run_id):
             continue
         update_chat_run_status(run_id, "failed", completed_at)
-        from src.storage.permission_records import PermissionRecordStore
+        from src.storage.records.permission_records import PermissionRecordStore
 
         if all(record.get(key) for key in ("id", "projectSlug", "sessionId")):
             PermissionRecordStore().invalidate_run_record(
@@ -391,7 +393,7 @@ async def steer_chat_background_run(
 def cancel_chat_runs_for_tenant(tenant_id: str) -> None:
     """停用租户时取消该租户还在跑的内存 Run，并写回该租户的库。"""
 
-    from src.storage import database
+    from src.storage.engine import database
     from src.tenancy.context import TenantContext, use_tenant
 
     now = datetime.now(timezone.utc).isoformat()
@@ -407,14 +409,14 @@ def cancel_chat_runs_for_tenant(tenant_id: str) -> None:
             task = run.async_task
             if task is not None and not task.done():
                 task.cancel()
-            database.update_chat_run_status(run.id, "cancelled", now)
+            update_chat_run_status(run.id, "cancelled", now)
 
 
 def _release_cancelled_run(run: ChatBackgroundRun) -> None:
     """先让 Run 失效，再清掉待批交互和恢复现场。"""
 
     from src.server.routes.chat.models import PENDING_AGENTS, PENDING_INTERACTIONS
-    from src.storage.permission_records import PermissionRecordStore
+    from src.storage.records.permission_records import PermissionRecordStore
 
     if run.persisted and run.project_slug and run.session_id:
         try:

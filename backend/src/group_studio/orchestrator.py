@@ -43,12 +43,6 @@ def assert_floor_allowed(status: str, *, role: str = "worker") -> None:
         raise GroupStudioError(409, ILLEGAL_TRANSITION)
 
 
-def assert_can_start_execution(status: str, goal: str) -> None:
-    """V2 没有执行期。"""
-
-    raise GroupStudioError(410, ILLEGAL_TRANSITION)
-
-
 def assert_serial_run(current_run_id: str | None) -> None:
     """同时只能有一条 GroupRun。"""
 

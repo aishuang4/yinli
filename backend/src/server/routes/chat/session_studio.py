@@ -1,10 +1,10 @@
 """Chat catalog / 删除会话时附加工作室信息。不经过 Team Runtime。"""
-
 from __future__ import annotations
+
 
 from src.group_studio.lifecycle import archive_for_chat_session_delete
 from src.server.routes.chat.models import ChatSession
-from src.storage.database import lookup_active_group_studios_by_chat_session_ids
+from src.storage.records.group_studio_records import lookup_active_group_studios_by_chat_session_ids
 
 
 def attach_group_studio_hints(sessions: list[ChatSession]) -> list[ChatSession]:

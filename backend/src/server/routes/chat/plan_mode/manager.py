@@ -5,30 +5,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from src.server.routes.chat.plan_mode.events import (
-    PlanDomainEvent,
-    build_plan_domain_event,
-    plan_domain_event_to_runtime_event,
-)
-from src.server.routes.chat.plan_mode.models import (
-    PLAN_ACTIVE_STATUSES,
-    PLAN_STATUS_APPROVED,
-    PLAN_STATUS_CANCELLED,
-    PLAN_STATUS_COMPLETED,
-    PLAN_STATUS_DRAFTING,
-    PLAN_STATUS_EXECUTING,
-    PLAN_STATUS_FAILED,
-    PLAN_STATUS_REPLANNING,
-    PLAN_STATUS_REVIEW_WAITING,
-    PLAN_STATUS_REVISING,
-    PLAN_STEP_STATUS_COMPLETED,
-    PLAN_STEP_STATUS_FAILED,
-    PLAN_STEP_STATUS_PENDING,
-    PLAN_STEP_STATUS_RUNNING,
-    PLAN_STEP_STATUS_SKIPPED,
-    PLAN_STEP_STATUSES,
-    PlanModeContext,
-)
+from src.server.routes.chat.plan_mode.events import PlanDomainEvent, build_plan_domain_event, plan_domain_event_to_runtime_event
+from src.server.routes.chat.plan_mode.models import PLAN_ACTIVE_STATUSES, PLAN_STATUS_APPROVED, PLAN_STATUS_CANCELLED, PLAN_STATUS_COMPLETED, PLAN_STATUS_DRAFTING, PLAN_STATUS_EXECUTING, PLAN_STATUS_FAILED, PLAN_STATUS_REPLANNING, PLAN_STATUS_REVIEW_WAITING, PLAN_STATUS_REVISING, PLAN_STEP_STATUS_COMPLETED, PLAN_STEP_STATUS_FAILED, PLAN_STEP_STATUS_PENDING, PLAN_STEP_STATUS_RUNNING, PLAN_STEP_STATUS_SKIPPED, PLAN_STEP_STATUSES, PlanModeContext
 
 
 class PlanModeManager:
@@ -217,7 +195,7 @@ class PlanModeManager:
             raise ValueError("A reviewable plan requires at least one structured step.")
         self.context.steps = steps
         if self.persist:
-            from src.storage.database import replace_plan_steps_record
+            from src.storage.records.plan_records import replace_plan_steps_record
 
             self.context.steps = replace_plan_steps_record(self.context.plan_id, steps)
         self._record("PLAN_STEPS_REPLACED", f"steps={len(self.context.steps)}")
@@ -233,7 +211,7 @@ class PlanModeManager:
         previous_status = self.context.status
         next_revision = self.context.revision + 1
         if self.persist:
-            from src.storage.database import publish_plan_revision_record
+            from src.storage.records.plan_records import publish_plan_revision_record
 
             published = publish_plan_revision_record(
                 self.context.plan_id,
@@ -275,7 +253,7 @@ class PlanModeManager:
         """返回当前持久化步骤。"""
 
         if self.persist and self.context.plan_id:
-            from src.storage.database import get_plan_record
+            from src.storage.records.plan_records import get_plan_record
 
             plan = get_plan_record(self.context.plan_id)
             if plan:
@@ -317,7 +295,7 @@ class PlanModeManager:
             for item in steps
         ]
         if self.persist:
-            from src.storage.database import update_plan_record, update_plan_step_record
+            from src.storage.records.plan_records import update_plan_record, update_plan_step_record
 
             updated_step = update_plan_step_record(
                 str(next_step["id"]),
@@ -444,7 +422,7 @@ class PlanModeManager:
     def _load(self, plan_id: str) -> None:
         if not self.persist:
             raise ValueError("Plan review actions require persistent storage.")
-        from src.storage.database import get_plan_record
+        from src.storage.records.plan_records import get_plan_record
 
         plan = get_plan_record(plan_id)
         if not plan or str(plan.get("sessionId") or "") != self.context.session_id:
@@ -461,7 +439,7 @@ class PlanModeManager:
         self.context.execution_run_id = str(plan.get("executionRunId") or "")
 
     def _create_plan_record(self) -> None:
-        from src.storage.database import create_plan_record
+        from src.storage.records.plan_records import create_plan_record
 
         now = datetime.now(timezone.utc).isoformat()
         create_plan_record({
@@ -486,7 +464,7 @@ class PlanModeManager:
     def _persist_plan(self, **updates: Any) -> None:
         if not self.persist or not self.context.plan_id:
             return
-        from src.storage.database import update_plan_record
+        from src.storage.records.plan_records import update_plan_record
 
         update_plan_record(self.context.plan_id, **updates)
 
@@ -504,7 +482,7 @@ class PlanModeManager:
 
         if not self.persist:
             return True
-        from src.storage.database import transition_plan_status_record
+        from src.storage.records.plan_records import transition_plan_status_record
 
         updated = transition_plan_status_record(
             self.context.plan_id,
@@ -520,7 +498,7 @@ class PlanModeManager:
     def _record(self, event_type: str, content: str, *, step_id: str | None = None) -> None:
         if not self.persist or not self.context.plan_id:
             return
-        from src.storage.database import append_plan_event_record
+        from src.storage.records.plan_records import append_plan_event_record
 
         append_plan_event_record(
             self.context.plan_id,

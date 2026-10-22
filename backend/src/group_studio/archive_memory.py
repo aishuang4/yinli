@@ -2,13 +2,13 @@
 
 进行中的人类发言走习惯判断，工人说完走专业区判断。时间线就是群聊消息本身。
 """
-
 from __future__ import annotations
+
 
 from typing import Any
 
 from src.group_studio.models import GROUP_STUDIO_HOST_AGENT_ID, GroupStudio
-from src.storage.database import list_group_studio_messages
+from src.storage.records.group_studio_records import list_group_studio_messages
 
 MAX_HUMAN_SNIPPETS = 3
 MAX_WORKER_CHARS = 6000
@@ -67,4 +67,3 @@ async def run_archive_memory(studio: GroupStudio) -> dict[str, Any]:
     """关闭房间不再把整段对话压成一个历史节点。"""
 
     return {"groupId": studio.id, "skipped": "timeline_is_source", "agentId": owner_agent_for_archive(studio)[0]}
-

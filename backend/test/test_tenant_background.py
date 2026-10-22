@@ -1,6 +1,9 @@
 """两个租户的定时任务各自落在自己的库里。"""
-
 from __future__ import annotations
+
+from src.storage.records.chat_session_records import insert_chat_session_if_absent
+from src.storage.records.chat_session_records import get_chat_session
+
 
 import asyncio
 from datetime import datetime, timezone
@@ -11,7 +14,7 @@ from src.config.model_catalog import CatalogError
 from src.scheduler.service import ScheduledJobService
 from src.scheduler.settings import set_scheduled_jobs_settings
 from src.scheduler.ticker import JobScheduler, reset_job_scheduler
-from src.storage import database
+from src.storage.engine import database
 from src.tenancy.context import TenantContext, use_tenant
 from src.tenancy.lifecycle import ensure_tenant
 
@@ -48,7 +51,7 @@ def test_tick_writes_each_tenant_session(hosted_env, monkeypatch):
         from src.tenancy.context import current_tenant
 
         tenant_id = current_tenant().tenant_id
-        database.insert_chat_session_if_absent({
+        insert_chat_session_if_absent({
             "id": f"sess-{tenant_id[-4:]}",
             "title": tenant_id,
             "agent_id": "default",
@@ -79,16 +82,16 @@ def test_tick_writes_each_tenant_session(hosted_env, monkeypatch):
 
     asyncio.run(run())
     with use_tenant(TenantContext.hosted(USER_A["id"])):
-        assert database.get_chat_session("sess-" + USER_A["id"][-4:]) is not None
-        assert database.get_chat_session("sess-" + USER_B["id"][-4:]) is None
+        assert get_chat_session("sess-" + USER_A["id"][-4:]) is not None
+        assert get_chat_session("sess-" + USER_B["id"][-4:]) is None
     with use_tenant(TenantContext.hosted(USER_B["id"])):
-        assert database.get_chat_session("sess-" + USER_B["id"][-4:]) is not None
-        assert database.get_chat_session("sess-" + USER_A["id"][-4:]) is None
+        assert get_chat_session("sess-" + USER_B["id"][-4:]) is not None
+        assert get_chat_session("sess-" + USER_A["id"][-4:]) is None
     reset_job_scheduler()
 
 
 def test_disabled_tenant_is_not_ticked(hosted_env):
-    from src.storage import control_records
+    from src.storage.control import control_records
     from src.tenancy.lifecycle import disable_tenant
 
     ensure_tenant(USER_A)
@@ -112,7 +115,7 @@ def test_disabled_tenant_is_not_ticked(hosted_env):
 
 def test_platform_binding_uses_tenant_user(hosted_env, monkeypatch):
     from src.config.runtime_settings import resolve_model_binding
-    from src.storage import auth_records
+    from src.storage.control import auth_records
 
     ensure_tenant(USER_A)
     auth_records.save_provider_key(
@@ -135,7 +138,7 @@ def test_platform_binding_uses_tenant_user(hosted_env, monkeypatch):
 def test_empty_default_uses_first_platform_model(hosted_env, monkeypatch):
     from src.config.runtime_paths import shared_root
     from src.config.runtime_settings import resolve_model_binding
-    from src.storage import auth_records
+    from src.storage.control import auth_records
 
     ensure_tenant(USER_A)
     auth_records.save_provider_key(

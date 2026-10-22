@@ -1,6 +1,6 @@
 """群聊工作室结束后的记忆收口。"""
-
 from __future__ import annotations
+
 
 import asyncio
 
@@ -10,11 +10,15 @@ from fastapi.testclient import TestClient
 
 from src.group_studio import archive_memory
 from src.group_studio.models import GROUP_STUDIO_HOST_AGENT_ID
-from src.group_studio.service import get_studio
+from src.group_studio.access import get_studio
 from src.group_studio.settings import set_group_studio_settings
 from src.server.routes import group_studio, settings as settings_routes
-from src.storage import database
-from src.storage.database import DEFAULT_PROJECT_ID, ensure_db, insert_group_studio_message
+from src.storage.engine import database
+from src.storage.engine.database import (
+    DEFAULT_PROJECT_ID,
+    ensure_db,
+)
+from src.storage.records.group_studio_records import insert_group_studio_message
 
 
 @pytest.fixture()
@@ -89,11 +93,11 @@ def test_run_archive_memory_persists_node_and_reflects_with_worker_agent(client,
         seen["item"] = item
         seen["model_name"] = model_name
         seen["rule_admission"] = rule_admission
-        from src.memory.reflection import MemoryReflectionResult
+        from src.memory.legacy.reflection import MemoryReflectionResult
 
         return MemoryReflectionResult(ignored_reason="")
 
-    monkeypatch.setattr("src.memory.reflection.reflect_completed_run_memory_with_agents", fake_reflect)
+    monkeypatch.setattr("src.memory.legacy.reflection.reflect_completed_run_memory_with_agents", fake_reflect)
 
     summary = asyncio.run(archive_memory.run_archive_memory(studio))
 
@@ -103,7 +107,7 @@ def test_run_archive_memory_persists_node_and_reflects_with_worker_agent(client,
 
 
 def test_worker_spec_hard_blocks_destructive_shell(client) -> None:
-    from src.group_studio.worker_runtime import WORKER_SHELL_BLACKLIST, build_worker_runtime_spec
+    from src.group_studio.worker_spec import WORKER_SHELL_BLACKLIST, build_worker_runtime_spec
 
     studio = _studio_with_pin(client)
     member = {

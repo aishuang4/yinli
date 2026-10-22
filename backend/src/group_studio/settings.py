@@ -1,11 +1,14 @@
 """群聊工作室运行时开关。json_store `system_settings/group_studio`，默认开启。"""
-
 from __future__ import annotations
+
 
 from typing import Any
 
 from src.config.runtime_settings import SYSTEM_SETTINGS_NAMESPACE
-from src.storage.database import get_json_record, upsert_json_record
+from src.storage.config.json_document_store import (
+    get_json_record,
+    upsert_json_record,
+)
 
 GROUP_STUDIO_SETTINGS_KEY = "group_studio"
 DEFAULT_MAX_MEMBERS = 6

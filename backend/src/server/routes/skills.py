@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from pathlib import Path
 
 from src.scheduler.service import ScheduledJobService
+from src.storage.records.project_records import get_project
 from src.server.routes.agents import remove_skills_from_agents
 from src.server.routes.skill_packages import MAX_SKILL_ARCHIVE_BYTES, _split_frontmatter
 from src.catalog.skills import discover_skill_packages
@@ -42,7 +43,6 @@ from src.skills.registry import (
     discover_external_skills,
     find_skill,
     get_installed_skill,
-    get_project,
     install_external_skill,
     list_installed_enabled_skills,
     list_skill_usage_details,

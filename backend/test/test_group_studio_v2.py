@@ -1,6 +1,6 @@
 """群聊工作室 V2：进群即 open、mentions 队列、旧阶段接口 410。"""
-
 from __future__ import annotations
+
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -29,10 +29,12 @@ from src.group_studio.speaker_queue import (
 )
 from src.group_studio.settings import set_group_studio_settings
 from src.server.routes import group_studio, settings as settings_routes
-from src.storage import database
-from src.storage.database import (
+from src.storage.engine import database
+from src.storage.engine.database import (
     DEFAULT_PROJECT_ID,
     ensure_db,
+)
+from src.storage.records.group_studio_records import (
     get_group_studio_max_event_seq,
     insert_group_studio_message,
     insert_group_studio_run,
@@ -133,7 +135,7 @@ def test_host_sentinel_cannot_join(client):
 
 def test_empty_mentions_queues_workers_only(client, monkeypatch):
     monkeypatch.setattr(
-        "src.group_studio.service._resolve_worker",
+        "src.group_studio.members._resolve_worker",
         lambda agent_id: {"id": agent_id, "name": agent_id, "role": "chat"},
     )
     body = _create(client)
@@ -209,7 +211,7 @@ def test_available_agents_excludes_seated_and_default(client, monkeypatch):
         ],
     )
     monkeypatch.setattr(
-        "src.group_studio.service._resolve_worker",
+        "src.group_studio.members._resolve_worker",
         lambda agent_id: {"id": agent_id, "name": agent_id, "role": "chat"},
     )
     body = _create(client)
@@ -239,7 +241,7 @@ def test_default_agent_cannot_join(client):
 
 def test_add_member_and_already_member(client, monkeypatch):
     monkeypatch.setattr(
-        "src.group_studio.service._resolve_worker",
+        "src.group_studio.members._resolve_worker",
         lambda agent_id: {"id": agent_id, "name": "写手", "role": "chat"},
     )
     body = _create(client)
@@ -259,7 +261,7 @@ def test_add_member_and_already_member(client, monkeypatch):
 
 def test_snapshot_current_speaker_follows_running_member(client, monkeypatch):
     monkeypatch.setattr(
-        "src.group_studio.service._resolve_worker",
+        "src.group_studio.members._resolve_worker",
         lambda agent_id: {"id": agent_id, "name": "写手", "role": "chat"},
     )
     body = _create(client)
@@ -351,7 +353,7 @@ def test_fresh_snapshot_has_null_last_turn(client):
 
 def test_enqueue_handoff_appends_and_ignores_invalid(client, monkeypatch):
     monkeypatch.setattr(
-        "src.group_studio.service._resolve_worker",
+        "src.group_studio.members._resolve_worker",
         lambda agent_id: {"id": agent_id, "name": agent_id, "role": "chat"},
     )
     body = _create(client)
@@ -390,7 +392,7 @@ def test_enqueue_handoff_appends_and_ignores_invalid(client, monkeypatch):
 
 def test_human_message_sets_last_turn_and_rerun(client, monkeypatch):
     monkeypatch.setattr(
-        "src.group_studio.service._resolve_worker",
+        "src.group_studio.members._resolve_worker",
         lambda agent_id: {"id": agent_id, "name": agent_id, "role": "chat"},
     )
     body = _create(client)
@@ -441,7 +443,7 @@ def test_human_message_sets_last_turn_and_rerun(client, monkeypatch):
 
 def test_rerun_guards(client, monkeypatch):
     monkeypatch.setattr(
-        "src.group_studio.service._resolve_worker",
+        "src.group_studio.members._resolve_worker",
         lambda agent_id: {"id": agent_id, "name": agent_id, "role": "chat"},
     )
     body = _create(client)
@@ -483,7 +485,7 @@ def test_rerun_guards(client, monkeypatch):
 
 def test_interrupt_clears_wave_spoken(client, monkeypatch):
     monkeypatch.setattr(
-        "src.group_studio.service._resolve_worker",
+        "src.group_studio.members._resolve_worker",
         lambda agent_id: {"id": agent_id, "name": agent_id, "role": "chat"},
     )
     body = _create(client)

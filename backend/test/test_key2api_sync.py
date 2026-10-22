@@ -13,7 +13,8 @@ from src.tenancy.context import TenantContext, use_tenant
 from src.server.auth.platform_models import router as platform_router
 from src.server.auth.routes import auth_router
 from src.server.local_access import LocalAccessMiddleware
-from src.storage import auth_records, database
+from src.storage.engine import database
+from src.storage.control import auth_records
 
 
 @pytest.fixture()

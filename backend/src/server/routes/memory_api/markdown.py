@@ -1,12 +1,12 @@
 """旧 Markdown 记忆和待确认候选路由。"""
-
 from __future__ import annotations
+
 
 from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query
 
-from src.memory.markdown_store import MarkdownMemoryStore
+from src.memory.legacy.markdown_files import LegacyMarkdownStore
 from src.memory.nodes import MemoryNodeService, MemoryNodeWrite
 from src.memory.prompt_cache import invalidate_memory_prompts
 from src.memory.settings import get_memory_admission_policy, save_memory_admission_policy
@@ -14,16 +14,18 @@ from src.memory.timeline import search_timeline
 from src.memory.trace import MEMORY_AUDIT_EVENT_TYPE, record_memory_audit_event
 from src.server.routes.memory_api.models import *
 from src.server.routes.memory_api.support import _markdown_doc_response, _record_memory_management_audit
-from src.storage.database import (
+from src.storage.records.memory_markdown_candidates import (
     count_pending_memory_markdown_candidates,
     get_memory_markdown_candidate,
-    get_memory_node,
     list_memory_markdown_candidates,
-    list_run_events_by_type,
-    record_memory_retrieval_feedback,
     set_memory_markdown_candidate_status,
+)
+from src.storage.records.memory_records import (
+    get_memory_node,
+    record_memory_retrieval_feedback,
     update_memory_node_status,
 )
+from src.storage.records.trace_records import list_run_events_by_type
 from src.vector_store.policy import get_vector_store_policy
 
 router = APIRouter()
@@ -51,7 +53,7 @@ async def update_markdown_candidate(
 ) -> dict[str, Any]:
     """采纳（真正写入 Markdown）或拒绝一条候选。"""
 
-    from src.memory.reflection import apply_markdown_candidate
+    from src.memory.legacy.reflection import apply_markdown_candidate
 
     record = get_memory_markdown_candidate(record_id)
     if not record or str(record.get("projectSlug") or "default") != project_slug:
@@ -103,7 +105,7 @@ async def update_markdown_candidate(
 async def read_agent_markdown_memory(agent_id: str) -> dict[str, Any]:
     """读取 Agent Markdown 记忆；不存在时返回默认模板但不创建文件。"""
 
-    doc = MarkdownMemoryStore().read_agent_memory(agent_id)
+    doc = LegacyMarkdownStore().read_agent_memory(agent_id)
     return _markdown_doc_response(doc)
 
 
@@ -111,7 +113,7 @@ async def read_agent_markdown_memory(agent_id: str) -> dict[str, Any]:
 async def write_agent_markdown_memory(agent_id: str, data: MarkdownMemoryUpdate) -> dict[str, Any]:
     """保存 Agent Markdown 记忆；首次保存时创建文件。"""
 
-    doc = MarkdownMemoryStore().write_agent_memory(agent_id, data.content)
+    doc = LegacyMarkdownStore().write_agent_memory(agent_id, data.content)
     invalidate_memory_prompts()
     return _markdown_doc_response(doc)
 
@@ -120,7 +122,7 @@ async def write_agent_markdown_memory(agent_id: str, data: MarkdownMemoryUpdate)
 async def read_default_user_markdown_memory() -> dict[str, Any]:
     """读取唯一用户 Markdown 记忆；不存在时返回默认模板但不创建文件。"""
 
-    doc = MarkdownMemoryStore().read_user_memory("default")
+    doc = LegacyMarkdownStore().read_user_memory("default")
     return _markdown_doc_response(doc)
 
 
@@ -128,7 +130,7 @@ async def read_default_user_markdown_memory() -> dict[str, Any]:
 async def write_default_user_markdown_memory(data: MarkdownMemoryUpdate) -> dict[str, Any]:
     """保存唯一用户 Markdown 记忆；首次保存时创建文件。"""
 
-    doc = MarkdownMemoryStore().write_user_memory("default", data.content)
+    doc = LegacyMarkdownStore().write_user_memory("default", data.content)
     invalidate_memory_prompts()
     return _markdown_doc_response(doc)
 
@@ -137,7 +139,7 @@ async def write_default_user_markdown_memory(data: MarkdownMemoryUpdate) -> dict
 async def read_user_markdown_memory(user_id: str) -> dict[str, Any]:
     """读取用户 Markdown 记忆；不存在时返回默认模板但不创建文件。"""
 
-    doc = MarkdownMemoryStore().read_user_memory(user_id)
+    doc = LegacyMarkdownStore().read_user_memory(user_id)
     return _markdown_doc_response(doc)
 
 
@@ -145,7 +147,7 @@ async def read_user_markdown_memory(user_id: str) -> dict[str, Any]:
 async def write_user_markdown_memory(user_id: str, data: MarkdownMemoryUpdate) -> dict[str, Any]:
     """保存用户 Markdown 记忆；首次保存时创建文件。"""
 
-    doc = MarkdownMemoryStore().write_user_memory(user_id, data.content)
+    doc = LegacyMarkdownStore().write_user_memory(user_id, data.content)
     invalidate_memory_prompts()
     return _markdown_doc_response(doc)
 
@@ -154,7 +156,7 @@ async def write_user_markdown_memory(user_id: str, data: MarkdownMemoryUpdate) -
 async def read_default_global_markdown_memory() -> dict[str, Any]:
     """读取唯一全局偏好 Markdown 记忆；不存在时返回默认模板但不创建文件。"""
 
-    doc = MarkdownMemoryStore().read_global_memory()
+    doc = LegacyMarkdownStore().read_global_memory()
     return _markdown_doc_response(doc)
 
 
@@ -162,8 +164,6 @@ async def read_default_global_markdown_memory() -> dict[str, Any]:
 async def write_default_global_markdown_memory(data: MarkdownMemoryUpdate) -> dict[str, Any]:
     """保存唯一全局偏好 Markdown 记忆；首次保存时创建文件。"""
 
-    doc = MarkdownMemoryStore().write_global_memory(data.content)
+    doc = LegacyMarkdownStore().write_global_memory(data.content)
     invalidate_memory_prompts()
     return _markdown_doc_response(doc)
-
-

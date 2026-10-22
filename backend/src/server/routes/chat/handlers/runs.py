@@ -21,7 +21,8 @@ from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.lifecycle import ACTIVE_RUN_STATUSES
 from src.server.routes.chat.router import router
 from src.server.routes.chat.team_runtime.registry import get_team_service
-from src.storage.database import DEFAULT_PROJECT_ID, get_latest_user_chat_message
+from src.storage.engine.database import DEFAULT_PROJECT_ID
+from src.storage.records.chat_session_records import get_latest_user_chat_message
 
 
 class TeamMailRequest(BaseModel):

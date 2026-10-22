@@ -1,6 +1,6 @@
 """标准 Skill 包注册与导出测试。"""
-
 from __future__ import annotations
+
 
 import zipfile
 from io import BytesIO
@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from src.storage import database
+from src.skills.registry import cached_skill_records, write_skill_packages
 
 
 def test_imported_skill_requires_standard_frontmatter_fields():
@@ -258,7 +258,7 @@ def test_load_user_skills_backfills_missing_standard_package(tmp_path, monkeypat
     monkeypatch.setattr("src.server.routes.skill_packages.skill_packages_root", lambda: tmp_path / "skill_packages")
     monkeypatch.setattr("src.skills.registry.skill_packages_root", lambda: tmp_path / "skill_packages")
     try:
-        database.replace_skills({
+        write_skill_packages({
             "custom-old-skill": {
                 "id": "custom-old-skill",
                 "name": "旧 Skill",
@@ -286,7 +286,7 @@ def test_load_user_skills_backfills_missing_standard_package(tmp_path, monkeypat
         assert skill.resources == ["SKILL.md"]
         assert skill_md.exists()
         assert "name: 旧 Skill" in skill_md.read_text(encoding="utf-8")
-        stored = next(item for item in database.list_skills() if item["id"] == "custom-old-skill")
+        stored = next(item for item in cached_skill_records() if item["id"] == "custom-old-skill")
         assert Path(stored["resourcePath"]).resolve() == Path(skill.resource_path).resolve()
     finally:
         skills_routes._skills.clear()

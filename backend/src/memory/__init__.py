@@ -1,41 +1,12 @@
-"""新记忆模块。
+"""当前记忆路径：习惯、专业区和时间线。
 
-MVP 先提供长期节点记忆的数据层；运行时 Hook 和 Tools 后续接入。
+旧三层 Markdown 与回合结束后的节点写入在 `legacy`。
 """
 
-from src.memory.nodes import MemoryNodeService
 from src.memory.markdown_store import MarkdownMemoryStore
-from src.memory.admission import MemoryAdmissionInput, MemoryAdmissionDecision, evaluate_memory_admission
-from src.memory.node_persist import MemoryNodePersistInput, persist_completed_run_memory_node
-from src.memory.retrieval import MemoryRetrievalContext, build_memory_injection_text
+from src.memory.timeline import search_timeline
 
 __all__ = [
-    "MemoryNodeService",
     "MarkdownMemoryStore",
-    "MemoryAdmissionInput",
-    "MemoryAdmissionDecision",
-    "evaluate_memory_admission",
-    "MemoryRetrievalContext",
-    "build_memory_injection_text",
-    "MemoryNodePersistInput",
-    "persist_completed_run_memory_node",
-    "MemoryReflectionInput",
-    "reflect_completed_run_memory",
-    "reflect_completed_run_memory_with_agents",
+    "search_timeline",
 ]
-
-_REFLECTION_EXPORTS = {
-    "MemoryReflectionInput",
-    "reflect_completed_run_memory",
-    "reflect_completed_run_memory_with_agents",
-}
-
-
-def __getattr__(name: str):
-    """懒加载 reflection 导出，避免 tools.memory_reflection 单测出现循环导入。"""
-
-    if name in _REFLECTION_EXPORTS:
-        from src.memory import reflection
-
-        return getattr(reflection, name)
-    raise AttributeError(f"module 'src.memory' has no attribute {name!r}")

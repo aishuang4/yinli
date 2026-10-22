@@ -1,6 +1,8 @@
 """Trace Observation 存储与安全写入。"""
-
 from __future__ import annotations
+
+from src.storage.records.observation_records import insert_trace_observation
+
 
 import pytest
 
@@ -9,8 +11,8 @@ from src.server.routes.chat.observation_writer import (
     open_observation,
     patch_observation,
 )
-from src.storage import database
-from src.storage.database import (
+from src.storage.engine import database
+from src.storage.records.observation_records import (
     get_trace_observation,
     insert_trace_observation,
     list_trace_observations,
@@ -107,7 +109,7 @@ def test_writer_swallows_storage_errors(monkeypatch) -> None:
         raise RuntimeError("db down")
 
     monkeypatch.setattr(
-        "src.storage.database.insert_trace_observation",
+        "src.storage.records.observation_records.insert_trace_observation",
         boom,
     )
     assert open_observation(

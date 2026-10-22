@@ -1,5 +1,12 @@
 """权限事实的租户隔离、原地升级和一次许可事务回归。"""
 
+from src.storage.records.chat_run_records import get_chat_run
+from src.storage.records.chat_run_records import update_chat_run_status
+from src.storage.records.chat_run_records import upsert_chat_run
+from src.storage.records.chat_session_records import update_chat_session
+from src.storage.records.chat_session_records import insert_chat_session_if_absent
+from src.storage.records.chat_session_records import get_chat_session
+
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
@@ -7,14 +14,14 @@ from uuid import uuid4
 import pytest
 
 from src.runtime.authorization import ActionSnapshot, AuthorizationDecision, RunAuthorization
-from src.storage import database
-from src.storage.permission_records import PermissionRecordStore
+from src.storage.engine import database
+from src.storage.records.permission_records import PermissionRecordStore
 from src.tenancy.context import TenantContext, use_tenant
 
 
 def action_for(tenant="local", **updates):
-    if database.get_chat_run("r") is None:
-        database.upsert_chat_run({"id": "r", "projectSlug": "p", "sessionId": "s"})
+    if get_chat_run("r") is None:
+        upsert_chat_run({"id": "r", "projectSlug": "p", "sessionId": "s"})
     owner = RunAuthorization(tenantId=tenant, projectSlug="p", sessionId="s",
                              runId="r", actorId="a", capabilityVersion="1", **updates)
     return ActionSnapshot(authorization=owner, callId="c", toolName="Fake", toolVersion="1",
@@ -52,7 +59,7 @@ def test_projection_separates_approval_from_execution_for_trace_and_snapshot():
     from src.server.routes.chat.completion import _permission_summary
     from src.server.routes.chat.observation_runtime import _review_trace_facts
     from src.server.routes.chat.projection.source_normalizer import _permission_facts
-    from src.storage.permission_records import project_permission_fact
+    from src.storage.records.permission_records import project_permission_fact
 
     store, action = PermissionRecordStore(), action_for()
     approved = save_pending(store, action)
@@ -100,7 +107,7 @@ def test_projection_separates_approval_from_execution_for_trace_and_snapshot():
 def test_old_db_upgrades_and_snapshot_roundtrip():
     path = database.db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    from src.storage.permission_schema import PERMISSION_SCHEMA_SQL
+    from src.storage.engine.permission_schema import PERMISSION_SCHEMA_SQL
     legacy = PERMISSION_SCHEMA_SQL.replace("    invalidated_at TEXT NOT NULL DEFAULT '',\n", "").replace(
         "    expires_at TEXT NOT NULL DEFAULT '',\n", "",
     )
@@ -300,28 +307,28 @@ def test_permission_connections_close_on_success_and_error(monkeypatch):
 
 
 def test_run_metadata_is_strict_and_frozen_while_session_selection_can_change():
-    session = database.insert_chat_session_if_absent({"id": "selected"})
+    session = insert_chat_session_if_absent({"id": "selected"})
     assert session["approvalMode"] == "manual"
-    database.update_chat_session("selected", approval_mode="full_access")
-    assert database.get_chat_session("selected")["approvalMode"] == "full_access"
+    update_chat_session("selected", approval_mode="full_access")
+    assert get_chat_session("selected")["approvalMode"] == "full_access"
     metadata = {"schemaVersion": 1, "tenantId": "local", "approvalMode": "manual", "reviewerConfigVersion": ""}
-    run = database.upsert_chat_run({"id": "frozen", "sessionId": "selected", "agentId": "actor",
+    run = upsert_chat_run({"id": "frozen", "sessionId": "selected", "agentId": "actor",
                                     "authorization": metadata})
-    database.update_chat_session("selected", approval_mode="model_review")
-    assert database.get_chat_run("frozen")["authorization"] == metadata
-    assert database.upsert_chat_run({"id": "frozen", "status": "waiting_permission"})["authorization"] == metadata
+    update_chat_session("selected", approval_mode="model_review")
+    assert get_chat_run("frozen")["authorization"] == metadata
+    assert upsert_chat_run({"id": "frozen", "status": "waiting_permission"})["authorization"] == metadata
     for changes in ({"approvalMode": "full_access"}, {"tenantId": "other"}, {"unexpected": True}):
         with pytest.raises(ValueError):
-            database.upsert_chat_run({"id": "frozen", "authorization": {**metadata, **changes}})
+            upsert_chat_run({"id": "frozen", "authorization": {**metadata, **changes}})
     for key in ("sessionId", "projectSlug", "agentId"):
         with pytest.raises(ValueError):
-            database.upsert_chat_run({"id": "frozen", key: "different"})
-    assert database.get_chat_run("frozen")["authorization"] == run["authorization"]
+            upsert_chat_run({"id": "frozen", key: "different"})
+    assert get_chat_run("frozen")["authorization"] == run["authorization"]
     with pytest.raises(ValueError):
-        database.update_chat_session("selected", approval_mode="bypass")
+        update_chat_session("selected", approval_mode="bypass")
     with pytest.raises(ValueError):
-        database.insert_chat_session_if_absent({"id": "bad", "approvalMode": "trusted_tools"})
-    assert database.get_chat_session("bad") is None
+        insert_chat_session_if_absent({"id": "bad", "approvalMode": "trusted_tools"})
+    assert get_chat_session("bad") is None
 
 
 def _deny(store, action, *, source="model", reason_code="policy", reason="与用户限制冲突"):
@@ -357,7 +364,7 @@ def test_model_denial_review_keeps_original_snapshot_and_cannot_override_boundar
     with pytest.raises(ValueError, match="硬边界"):
         store.save_model_deny_with_review(boundary, blocked)
 
-    database.update_chat_run_status("r", "completed")
+    update_chat_run_status("r", "completed")
     fresh = action.model_copy(update={"call_id": "after-stop"})
     stopped = AuthorizationDecision(id=f"pd_{uuid4().hex}", actionFingerprint=fresh.fingerprint,
         verdict="deny", source="model", reasonCode="smartguard_deny", reason="审核模型拒绝这一次")
@@ -371,7 +378,7 @@ def test_startup_reconcile_invalidates_pending_approval_and_execution():
     from src.server.routes.chat.background_runs import reconcile_interrupted_chat_runs
 
     store, action = PermissionRecordStore(), action_for()
-    database.upsert_chat_run({"id": "r", "projectSlug": "p", "sessionId": "s",
+    upsert_chat_run({"id": "r", "projectSlug": "p", "sessionId": "s",
                               "status": "waiting_permission",
                               "authorization": {"schemaVersion": 1, "tenantId": "local",
                                                 "approvalMode": "manual", "reviewerConfigVersion": ""}})
@@ -383,7 +390,7 @@ def test_startup_reconcile_invalidates_pending_approval_and_execution():
 
     count = reconcile_interrupted_chat_runs()
     assert count == 1
-    assert database.get_chat_run("r")["status"] == "failed"
+    assert get_chat_run("r")["status"] == "failed"
     assert store.get_approval(pending.id, action.authorization).status == "interrupted"
     assert store.get_approval(approved.id, approved_action.authorization).status == "interrupted"
     assert store.get_execution(approved.id, approved_action.authorization).status == "unknown"
@@ -496,7 +503,7 @@ def test_review_keeps_original_deny_and_expiry_or_reject_returns_it():
 
 def test_approved_review_consumes_one_grant_and_trace_keeps_three_facts():
     from src.server.routes.chat.observation_runtime import observe_source_event, open_run_root
-    from src.storage.database import list_trace_observations
+    from src.storage.records.observation_records import list_trace_observations
 
     store, action = PermissionRecordStore(), action_for(approvalMode="model_review")
     denied = AuthorizationDecision(id=f"pd_{uuid4().hex}", actionFingerprint=action.fingerprint,

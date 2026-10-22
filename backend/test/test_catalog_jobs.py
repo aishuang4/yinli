@@ -9,8 +9,12 @@ from src.catalog.paths import jobs_dir
 from src.catalog.sync_jobs import persist_job_definition, sync_job_definitions
 from src.scheduler.service import ScheduledJobService
 from src.scheduler.settings import set_scheduled_jobs_enabled
-from src.storage import database
-from src.storage.database import DEFAULT_PROJECT_ID, DEFAULT_WORKSPACE_ID, ensure_db
+from src.storage.engine import database
+from src.storage.engine.database import (
+    DEFAULT_PROJECT_ID,
+    DEFAULT_WORKSPACE_ID,
+    ensure_db,
+)
 
 
 @pytest.fixture()

@@ -1,6 +1,9 @@
 """阶段 1 存储底座：写事务、备份恢复、健康检查和大对象外置。"""
-
 from __future__ import annotations
+
+from src.storage.records.observation_records import get_trace_observation
+from src.storage.records.observation_records import insert_trace_observation
+
 
 import sqlite3
 import threading
@@ -8,10 +11,10 @@ import time
 
 import pytest
 
-from src.storage import database
-from src.storage.database_schema import FACT_SOURCE_TABLES, LEDGER_TABLES, META_TABLES
-from src.storage.maintenance import backup, health, recover
-from src.storage.sqlite_tx import StorageLocked, open_autocommit
+from src.storage.engine import database
+from src.storage.engine.database_schema import FACT_SOURCE_TABLES, LEDGER_TABLES, META_TABLES
+from src.storage.engine.maintenance import backup, health, recover
+from src.storage.engine.sqlite_tx import StorageLocked, open_autocommit
 
 
 def test_write_tx_commits_and_rolls_back():
@@ -176,7 +179,7 @@ def test_tables_are_classified():
 
 def test_trace_payload_over_64kb_spills_to_session_file():
     blob = "x" * 70_000
-    database.insert_trace_observation(
+    insert_trace_observation(
         {
             "id": "obs-big",
             "runId": "run-big",
@@ -185,7 +188,7 @@ def test_trace_payload_over_64kb_spills_to_session_file():
             "output": {"blob": blob},
         }
     )
-    loaded = database.get_trace_observation("obs-big")
+    loaded = get_trace_observation("obs-big")
     assert loaded is not None
     assert loaded["output"]["blob"] == blob
     with database.read_conn() as conn:
@@ -196,7 +199,7 @@ def test_trace_payload_over_64kb_spills_to_session_file():
     assert len(row["payload_sha256"]) == 64
     assert len(row["output_json"]) < 1000
 
-    database.insert_trace_observation(
+    insert_trace_observation(
         {
             "id": "obs-small",
             "runId": "run-small",

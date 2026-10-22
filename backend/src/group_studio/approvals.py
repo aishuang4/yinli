@@ -1,6 +1,6 @@
 """工作室独立审批。只构造 AgentScope 恢复事件，不写入 Chat pending 字典。"""
-
 from __future__ import annotations
+
 
 import json
 import uuid
@@ -21,7 +21,7 @@ from src.group_studio.events import emit_envelope
 from src.group_studio.models import GroupApproval
 from src.group_studio.orchestrator import assert_can_mutate
 from src.group_studio.sessions import get_session
-from src.storage.database import (
+from src.storage.records.group_studio_records import (
     get_group_studio_approval,
     get_group_studio_snapshot,
     insert_group_studio_approval,

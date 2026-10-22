@@ -4,6 +4,8 @@
 
 - agent_spec：主 Agent 规格、缓存 key、按规格创建
 - governance：上下文 middleware、记忆注入、会话状态
+- model_call_trace：非单 Agent 路径的上下文压缩和用量 trace
+- user_note：把附加说明拼到用户文本后面
 - chat_session：查找和确保 Chat session
 - agent_resources：MCP、知识库工具和文件范围
 - scheduled_chat：定时任务启动、读取、取消和对账 Chat Run

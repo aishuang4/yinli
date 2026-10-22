@@ -3,8 +3,8 @@
 群聊和定时任务只能走 src.runtime 公开入口。其他域已经存在的 Chat 依赖写在
 ALLOWLIST 里；新增或漏删都会失败。src/runtime 是适配层，允许调用 Chat 内部模块。
 """
-
 from __future__ import annotations
+
 
 import ast
 from pathlib import Path
@@ -14,7 +14,8 @@ CHAT_PREFIX = "src.server.routes.chat"
 SEALED_ROOTS = ("group_studio/", "scheduler/")
 PUBLIC_ENTRY = (
     "src.runtime.agent_spec、src.runtime.governance、src.runtime.chat_session、"
-    "src.runtime.agent_resources、src.runtime.scheduled_chat、src.runtime.capabilities"
+    "src.runtime.agent_resources、src.runtime.scheduled_chat、src.runtime.capabilities、"
+    "src.runtime.model_call_trace、src.runtime.user_note"
 )
 
 # 文件相对 backend/src，模块，导入名。群聊和定时任务不在这里。
@@ -86,8 +87,10 @@ PUBLIC_RUNTIME_MODULES = {
     "src.runtime.agent_spec",
     "src.runtime.chat_session",
     "src.runtime.governance",
+    "src.runtime.model_call_trace",
     "src.runtime.scheduled_chat",
     "src.runtime.capabilities",
+    "src.runtime.user_note",
 }
 
 

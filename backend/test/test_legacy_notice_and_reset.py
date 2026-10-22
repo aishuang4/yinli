@@ -1,6 +1,6 @@
 """封存提示与开发机清库。"""
-
 from __future__ import annotations
+
 
 import sqlite3
 from pathlib import Path
@@ -10,9 +10,12 @@ from fastapi.testclient import TestClient
 from src.cli.main import main
 from src.config import runtime_paths
 from src.server.main import app
-from src.storage.database import db_path, ensure_db
-from src.storage.legacy_archive import archive_legacy_layout, pending_legacy_notice
-from src.storage.maintenance import DevResetRefused, reset_dev_database
+from src.storage.engine.database import (
+    db_path,
+    ensure_db,
+)
+from src.storage.engine.legacy_archive import archive_legacy_layout, pending_legacy_notice
+from src.storage.engine.maintenance import DevResetRefused, reset_dev_database
 
 
 def _plant_old_database(data: Path) -> None:

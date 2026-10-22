@@ -6,7 +6,7 @@ import pytest
 
 from src.security.authorization.policy import evaluate_policy
 from src.security.authorization.service import PlatformAuthorizationService
-from src.storage import database
+from src.storage.engine import database
 from test.authorization_fakes import run_async
 from test.test_permission_records import action_for
 

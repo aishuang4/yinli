@@ -2,12 +2,12 @@
 
 本服务不持有 live Agent；它只负责 invocation 的事实状态与 transcript。
 """
-
 from __future__ import annotations
+
 
 from typing import Any
 
-from src.storage.database import (
+from src.storage.records.trace_records import (
     append_subagent_transcript_item,
     create_subagent_invocation,
     get_subagent_invocation,

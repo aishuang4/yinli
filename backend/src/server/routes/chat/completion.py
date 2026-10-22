@@ -13,7 +13,7 @@ from src.server.routes.chat.store import _append_assistant_message
 from src.server.routes.chat.trace_recorder import _record_run_event, _trim_text
 from src.config.runtime_paths import project_default_root
 from src.runtime_context import FolderGrant, RuntimeContext, resolve_runtime_context
-from src.storage.database import get_chat_session_location
+from src.storage.records.project_records import get_chat_session_location
 
 
 def _permission_summary(run_id: str) -> dict:
@@ -22,7 +22,7 @@ def _permission_summary(run_id: str) -> dict:
     if not run_id:
         return {"outcome": "complete", "counts": {}, "items": []}
     try:
-        from src.storage.permission_records import PermissionRecordStore
+        from src.storage.records.permission_records import PermissionRecordStore
         return PermissionRecordStore().summarize_run(run_id)
     except Exception:
         return {"outcome": "complete", "counts": {}, "items": []}

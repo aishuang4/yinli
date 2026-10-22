@@ -1,6 +1,6 @@
 """一次 queued firing 的执行：拿信号量后 starting，再走 start_scheduled_chat_run。"""
-
 from __future__ import annotations
+
 
 import asyncio
 import logging
@@ -26,7 +26,7 @@ from src.scheduler.models import (
 )
 from src.scheduler.service import ScheduledJobService
 from src.runtime.scheduled_chat import cancel_chat_background_run, get_chat_background_run
-from src.storage.database import get_project
+from src.storage.records.project_records import get_project
 
 logger = logging.getLogger(__name__)
 
@@ -284,7 +284,7 @@ def _scan_outputs(job: ScheduledJob, firing: ScheduledJobRun) -> dict[str, Any]:
 def _assistant_result_text(session_id: str) -> str:
     if not str(session_id or "").strip():
         return ""
-    from src.storage.database import get_latest_assistant_chat_message
+    from src.storage.records.chat_session_records import get_latest_assistant_chat_message
 
     record = get_latest_assistant_chat_message(session_id)
     return str((record or {}).get("content") or "").strip()

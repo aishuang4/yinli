@@ -4,10 +4,10 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query
 
-from src.storage.database import (
-    DEFAULT_PROJECT_ID,
+from src.storage.engine.database import DEFAULT_PROJECT_ID
+from src.storage.records.project_records import get_project
+from src.storage.records.trace_records import (
     count_subagent_transcript_items,
-    get_project,
     get_subagent_invocation,
     list_subagent_invocations,
     list_subagent_transcript_items,

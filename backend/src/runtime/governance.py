@@ -5,19 +5,14 @@ Chat 路由里的 `runtime_governance.py` 只做 re-export。新代码不要再�
 
 约束：本模块不得 import `leader_stream` / `hitl`（群聊工作室有 import 隔离测试）。
 """
-
 from __future__ import annotations
 
+
 import logging
-from typing import Any
 
 from src.agents.session_context import restore_session_context_state, snapshot_session_context_state
-from src.memory.retrieval import (
-    MemoryRecallResult,
-    build_habit_prompt,
-    build_professional_prompt,
-)
-from src.memory.trace import record_memory_audit_event
+from src.memory.legacy.injection import MemoryRecallResult
+from src.memory.retrieval import build_habit_prompt, build_professional_prompt
 from src.server.routes.chat.context_middleware import (
     ContextCompressionMiddleware,
     ContextHygieneMiddleware,
@@ -27,14 +22,11 @@ from src.server.routes.chat.context_middleware import (
 from src.memory.prompt_cache import session_habit_prompt, session_professional_prompt
 from src.runtime.tool_loop_guard import ToolLoopGuardMiddleware
 from src.server.routes.chat.skill_context_middleware import SkillContextMiddleware
-from src.server.routes.chat.trace_recorder import (
-    PROMPT_SECTIONS_ATTR,
-    _record_run_event,
-    apply_model_call_token_usage,
-    build_model_call_context_stats_async,
-    record_context_compression_events,
+from src.server.routes.chat.trace_recorder import PROMPT_SECTIONS_ATTR
+from src.storage.records.session_context_state import (
+    load_session_context_state,
+    save_session_context_state,
 )
-from src.storage.database import load_session_context_state, save_session_context_state
 
 logger = logging.getLogger(__name__)
 
@@ -183,91 +175,3 @@ def _compose_frozen_memory_prompt(
             build=lambda: build_professional_prompt(agent_id),
         )
     return "\n\n".join(part for part in (habit, professional) if part.strip())
-
-
-def record_memory_recall_audit(
-    *,
-    session_id: str,
-    persist: bool,
-    agent_id: str,
-    agent_name: str,
-    recall: MemoryRecallResult,
-    scope_label: str = "",
-) -> None:
-    """把自动召回写进 MEMORY_AUDIT：命中哪些 nodeId、候选多少、是否注入。"""
-
-    prefix = f"[{scope_label}] " if scope_label else ""
-    record_memory_audit_event(
-        session_id=session_id,
-        persist=persist,
-        agent_id=agent_id,
-        agent_name=agent_name,
-        action="memory_recall",
-        status="completed",
-        title=f"{prefix}Memory recalled for turn" if recall.node_ids else f"{prefix}Memory recall found nothing relevant",
-        content=f"injected={len(recall.node_ids)}, candidates={recall.candidate_count}",
-        payload={
-            "nodeIds": recall.node_ids,
-            "candidateCount": recall.candidate_count,
-            "queryChars": recall.query_chars,
-            "injectedChars": len(recall.text),
-        },
-    )
-
-
-def append_user_note(text: str, note: str) -> str:
-    """把附件说明 / 召回记忆等附加段拼到用户文本后面。"""
-
-    if not note:
-        return text
-    return f"{text}\n\n{note}" if text else note
-
-
-async def observe_model_call_event(
-    *,
-    agent: object,
-    event_type: str,
-    event_data: dict[str, Any],
-    session_id: str,
-    persist: bool,
-    scope: str,
-    agent_id: str,
-    agent_name: str,
-) -> dict[str, Any]:
-    """非单 Agent 路径的 MODEL_CALL_START / END 观测：写 CONTEXT_COMPRESSED 与 CONTEXT_USAGE trace。
-
-    返回本次统计，调用方可选择再投影成自己的领域事件。非模型调用事件直接返回空 dict。
-    """
-
-    if event_type not in {"MODEL_CALL_START", "MODEL_CALL_END"}:
-        return {}
-    record_context_compression_events(
-        agent=agent,
-        session_id=session_id,
-        persist=persist,
-        scope=scope,
-        agent_id=agent_id,
-        agent_name=agent_name,
-    )
-    try:
-        stats = await build_model_call_context_stats_async(agent)
-    except Exception:
-        return {}
-    if event_type == "MODEL_CALL_END":
-        apply_model_call_token_usage(stats, event_data)
-    if not stats:
-        return {}
-    used = int(stats.get("inputTokens") or stats.get("estimatedTokens") or 0)
-    window = int(stats.get("contextWindow") or 0)
-    _record_run_event(
-        session_id=session_id,
-        event_type="CONTEXT_USAGE",
-        persist=persist,
-        scope=scope,
-        agent_id=agent_id,
-        agent_name=agent_name,
-        status="completed" if event_type == "MODEL_CALL_END" else "running",
-        title=f"Context usage {used}" + (f" / {window}" if window else ""),
-        payload=dict(stats),
-    )
-    return stats

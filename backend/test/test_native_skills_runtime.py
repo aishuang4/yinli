@@ -1,19 +1,19 @@
 """AgentScope 原生 Skills 运行时回归测试。"""
-
 from __future__ import annotations
+
 
 import asyncio
 import os
 
-from src.agents.factory import (
+from src.agents.factory import _create_default_toolkit
+from src.agents.guarded_bash import (
     GuardedBash,
-    RuntimePathSkillLoader,
     _bash_error_chunk,
-    _create_default_toolkit,
     _decode_windows_shell_output,
     _resolve_windows_command_shell,
     _windows_utf8_command,
 )
+from src.agents.toolkit_builder import RuntimePathSkillLoader
 from src.agents.runtime_types import AgentGuardrails, RuntimeToolScope
 from src.security.permissions import ApprovalPolicy, UnifiedPermissionProfile
 from src.server.routes.chat.runtime_builder import build_runtime_agent_cache_key

@@ -25,9 +25,6 @@ from src.agents.system_agents import (
     is_system_agent_id,
 )
 from src.catalog.agent_models import (
-    AgentExportPackage,
-    AgentImportRequest,
-    AgentImportResponse,
     AgentResponse,
     Guardrails,
     ModelConfig,
@@ -135,6 +132,32 @@ class AgentUpdate(BaseModel):
     job_toolkit: Optional[JobToolkit] = Field(None, alias="jobToolkit")
 
     model_config = {"populate_by_name": True}
+
+
+class AgentExportPackage(BaseModel):
+    """可携带的 Agent 导出包。"""
+
+    schema_version: str = Field(default="agent-workstation.agent.v1", alias="schemaVersion")
+    exported_at: str = Field(alias="exportedAt")
+    agent: AgentResponse
+
+    model_config = {"populate_by_name": True}
+
+
+class AgentImportRequest(BaseModel):
+    """从导出包导入一个 Agent。"""
+
+    package: AgentExportPackage
+    conflict_strategy: str = Field(default="new_id", alias="conflictStrategy")
+
+    model_config = {"populate_by_name": True}
+
+
+class AgentImportResponse(BaseModel):
+    """导入一个 Agent 的结果。"""
+
+    agent: AgentResponse
+    warnings: list[str] = Field(default_factory=list)
 
 
 # 测试可 monkeypatch 此字典；生产路径按租户懒加载。

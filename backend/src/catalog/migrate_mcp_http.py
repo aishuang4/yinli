@@ -11,7 +11,7 @@ HTTP_MIGRATION_KEY = "http_tool_migration_v1"
 
 
 def _marker_done(key: str) -> bool:
-    from src.storage.database import get_json_record
+    from src.storage.config.json_document_store import get_json_record
 
     marker = get_json_record(CATALOG_NAMESPACE, key) or {}
     return str(marker.get("status") or "") == "done"

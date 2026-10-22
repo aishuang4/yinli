@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from src.server.auth.key2api import PLATFORM_PREFIX, Key2ApiError, _active_key, base_url, list_platform_models
 from src.server.auth.routes import require_user
-from src.storage.control_records import record_platform_call
+from src.storage.control.control_records import record_platform_call
 
 router = APIRouter(prefix="/api/platform/v1", tags=["平台转发"])
 

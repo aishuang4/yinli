@@ -1,6 +1,6 @@
 """时间线检索、习惯跳过和专业区覆盖的行为测试。"""
-
 from __future__ import annotations
+
 
 import asyncio
 
@@ -17,8 +17,11 @@ from src.memory.professional_update import ProfessionalUpdatePayload, apply_prof
 from src.memory.timeline import search_timeline
 from src.server.routes.chat.context_middleware import stub_timeline_retrieve_outputs
 from src.server.routes.chat.store import _append_assistant_message, _append_user_message
-from src.storage import database
-from src.storage.database import DEFAULT_PROJECT_ID, DEFAULT_WORKSPACE_ID
+from src.storage.engine import database
+from src.storage.engine.database import (
+    DEFAULT_PROJECT_ID,
+    DEFAULT_WORKSPACE_ID,
+)
 from src.tools.timeline_memory import TimelineIngest, TimelineRetrieve
 
 

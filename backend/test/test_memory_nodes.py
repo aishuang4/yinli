@@ -1,12 +1,17 @@
 """长期节点记忆数据层测试。"""
-
 from __future__ import annotations
+
+from src.storage.records.memory_records import list_memory_retrieval_feedback
+from src.storage.records.memory_records import mark_memory_node_used
+from src.storage.records.memory_records import list_memory_nodes
+from src.storage.records.memory_records import get_memory_node
+
 
 import pytest
 
 from src.memory.nodes import MemoryNodeService, MemoryNodeWrite
 from src.server.routes import memory as memory_routes
-from src.storage import database
+from src.storage.engine import database
 from src.vector_store.base import VectorQueryResult
 
 
@@ -234,7 +239,7 @@ def test_memory_retrieval_feedback_records_audit(isolated_db):
         )
     )
     audit = asyncio.run(memory_routes.memory_audit_events(limit=10, offset=0))
-    feedback_rows = database.list_memory_retrieval_feedback(limit=10)
+    feedback_rows = list_memory_retrieval_feedback(limit=10)
 
     assert result["ok"] is True
     assert result["feedbackId"] == feedback_rows[0]["id"]
@@ -359,7 +364,7 @@ class FailingUpsertBackend(FakeVectorBackend):
 
 
 def test_session_day_turns_aggregate_into_one_node(isolated_db):
-    from src.memory.node_persist import MemoryNodePersistInput, persist_completed_run_memory_node
+    from src.memory.legacy.node_persist import MemoryNodePersistInput, persist_completed_run_memory_node
     from src.memory.admission import MemoryAdmissionInput, evaluate_memory_admission
 
     backend = FakeVectorBackend()
@@ -392,7 +397,7 @@ def test_session_day_turns_aggregate_into_one_node(isolated_db):
     assert second["user_inputs"] == ["帮我把 Q3 销售表按地区汇总生成 xlsx 文件", "再把华东的明细单独导出一份 csv"]
     assert "共 2 轮" in second["summary"] and "最近：" in second["summary"]
     assert second["source_run_id"] == "run-2"
-    assert len(database.list_memory_nodes(project_slug="default")) == 2
+    assert len(list_memory_nodes(project_slug="default")) == 2
 
 
 def test_archive_stale_nodes_skips_pinned_and_recently_used(isolated_db):
@@ -404,14 +409,14 @@ def test_archive_stale_nodes_skips_pinned_and_recently_used(isolated_db):
     for node_id, pinned in (("old-plain", False), ("old-pinned", True)):
         service.upsert_node(MemoryNodeWrite(id=node_id, agent_id="agent-1", node_date=old, title=node_id, summary="s", pinned=pinned))
     service.upsert_node(MemoryNodeWrite(id="old-used", agent_id="agent-1", node_date=old, title="used", summary="s"))
-    database.mark_memory_node_used("old-used")
+    mark_memory_node_used("old-used")
     service.upsert_node(MemoryNodeWrite(id="fresh", agent_id="agent-1", node_date=date.today().isoformat(), title="fresh", summary="s"))
 
     archived = service.archive_stale_nodes()
 
     assert archived == ["old-plain"]
-    assert database.get_memory_node("old-plain")["status"] == "archived"
-    assert database.get_memory_node("old-plain")["vector_status"] == "deleted"
-    assert database.get_memory_node("old-pinned")["status"] == "active"
-    assert database.get_memory_node("old-used")["status"] == "active"
-    assert database.get_memory_node("fresh")["status"] == "active"
+    assert get_memory_node("old-plain")["status"] == "archived"
+    assert get_memory_node("old-plain")["vector_status"] == "deleted"
+    assert get_memory_node("old-pinned")["status"] == "active"
+    assert get_memory_node("old-used")["status"] == "active"
+    assert get_memory_node("fresh")["status"] == "active"

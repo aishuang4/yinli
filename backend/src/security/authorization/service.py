@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from uuid import uuid4
 from weakref import WeakKeyDictionary, WeakValueDictionary
 
-from src.storage.permission_records import PermissionRecordStore
+from src.storage.records.permission_records import PermissionRecordStore
 
 from .models import ActionSnapshot, AuthorizationDecision, ExecutionRecord, RunAuthorization
 from .policy import BoundaryCheck, evaluate_policy

@@ -6,7 +6,7 @@ import json
 import uuid
 from typing import Any
 
-from src.storage.observation_records import OBSERVATION_KINDS
+from src.storage.records.observation_records import OBSERVATION_KINDS
 
 MAX_OBSERVATION_TEXT = 16000
 MAX_OBSERVATION_JSON_CHARS = 120000
@@ -31,7 +31,7 @@ def open_observation(
     if not persist or not run_id or kind not in OBSERVATION_KINDS:
         return None
     try:
-        from src.storage.database import get_trace_observation, insert_trace_observation
+        from src.storage.records.observation_records import get_trace_observation, insert_trace_observation
 
         if observation_id:
             existing = get_trace_observation(observation_id)
@@ -69,7 +69,7 @@ def close_observation(
     if not persist or not observation_id:
         return
     try:
-        from src.storage.database import close_trace_observation
+        from src.storage.records.observation_records import close_trace_observation
 
         close_trace_observation(
             observation_id,
@@ -95,7 +95,7 @@ def patch_observation(
     if not persist or not observation_id:
         return
     try:
-        from src.storage.database import update_trace_observation
+        from src.storage.records.observation_records import update_trace_observation
 
         update_trace_observation(
             observation_id,
@@ -120,7 +120,7 @@ def find_open_observation(
     if not persist or not run_id:
         return None
     try:
-        from src.storage.database import find_open_trace_observation
+        from src.storage.records.observation_records import find_open_trace_observation
 
         row = find_open_trace_observation(run_id=run_id, kind=kind, name=name)
         return str(row.get("id") or "") if row else None

@@ -1,6 +1,8 @@
 """长期节点记忆工具测试。"""
-
 from __future__ import annotations
+
+from src.storage.records.trace_records import list_run_events_by_type
+
 
 import asyncio
 import json
@@ -9,7 +11,7 @@ import pytest
 
 from src.agents.factory import _create_default_toolkit
 from src.memory.nodes import MemoryNodeService, MemoryNodeWrite
-from src.storage import database
+from src.storage.engine import database
 from src.tools.memory_nodes import MemoryNodeQuery, MemoryNodeTree
 
 
@@ -97,7 +99,7 @@ def test_memory_node_query_tool_records_retrieval_audit(isolated_db):
         ),
     )
 
-    events = database.list_run_events_by_type("MEMORY_AUDIT", limit=10)
+    events = list_run_events_by_type("MEMORY_AUDIT", limit=10)
     assert events[0]["sessionId"] == "session-1"
     assert events[0]["agentId"] == "agent-1"
     assert events[0]["payload"]["memoryType"] == "memory_node_query"

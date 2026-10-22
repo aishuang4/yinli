@@ -1,6 +1,8 @@
 """系统默认 WebSearch Job Agent 回归测试。"""
-
 from __future__ import annotations
+
+from src.storage.records.resource_catalog_records import list_agents
+
 
 import asyncio
 from pathlib import Path
@@ -9,10 +11,11 @@ from types import SimpleNamespace
 import pytest
 
 from src.agents.system_agents import DEFAULT_WEBSEARCH_JOB_AGENT_ID
+from src.catalog.loader import import_sqlite_agent_record
 from src.project_resources import ProjectResourceAccess
 from src.scheduler.firing_toolkit import assemble_scheduled_firing_toolkit_spec
 from src.server.routes import agents as agents_routes
-from src.storage import database
+from src.storage.engine import database
 from src.tools import scheduled_job_tools
 
 
@@ -60,7 +63,7 @@ def test_load_agents_backfills_system_job_agent_in_existing_database(
     """迁移后用户 Agent 进 profile 文件，系统 Agent 由代码提供，sqlite 表清空。"""
 
     monkeypatch.setattr("src.config.runtime_paths.USER_DATA_ROOT", tmp_path)
-    database.upsert_agent({
+    import_sqlite_agent_record({
         "id": "existing-agent",
         "name": "Existing",
         "system_prompt": "prompt",
@@ -76,7 +79,7 @@ def test_load_agents_backfills_system_job_agent_in_existing_database(
     assert "existing-agent" in agents_routes._agents
     assert "default" in agents_routes._agents
     assert DEFAULT_WEBSEARCH_JOB_AGENT_ID in agents_routes._agents
-    assert all(row["id"] != "existing-agent" for row in database.list_agents())
+    assert all(row["id"] != "existing-agent" for row in list_agents())
 
 
 def test_system_agents_are_visible_in_every_workspace(monkeypatch) -> None:

@@ -1,11 +1,11 @@
 """应用内通知 inbox：列表、已读和对外序列化。"""
-
 from __future__ import annotations
+
 
 from typing import Any
 
 from src.notifications.hub import notification_hub
-from src.storage.database import (
+from src.storage.records.scheduled_job_records import (
     count_unread_user_notifications,
     get_user_notification,
     list_user_notifications,

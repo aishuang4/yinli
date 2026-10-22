@@ -1,6 +1,6 @@
 """无人值守 firing：冻结 ToolScope/Skill、工具裁剪与 cwd Write overlay。"""
-
 from __future__ import annotations
+
 
 import asyncio
 import hashlib
@@ -29,14 +29,14 @@ from src.server.routes.chat.scheduled_runtime import (
 )
 from src.server.routes.chat.team_runtime.member_runtime import _build_team_tool_denial
 from src.server.routes.skills import Skill
-from src.storage import database
-from src.storage.database import (
+from src.storage.engine import database
+from src.skills.registry import write_skill_packages
+from src.storage.engine.database import (
     DEFAULT_PROJECT_ID,
-    create_project,
     ensure_db,
-    replace_skills,
-    upsert_agent,
 )
+from src.catalog.loader import import_sqlite_agent_record
+from src.storage.records.project_records import create_project
 
 
 class _FakeAgentScopeEvent:
@@ -60,7 +60,7 @@ def _service() -> ScheduledJobService:
 
 
 def _ensure_agent(agent_id: str) -> None:
-    upsert_agent({
+    import_sqlite_agent_record({
         "id": agent_id,
         "name": agent_id,
         "system_prompt": "prompt",
@@ -69,7 +69,7 @@ def _ensure_agent(agent_id: str) -> None:
 
 
 def _ensure_skill(skill_id: str, *, resource_path: str = "") -> None:
-    replace_skills({
+    write_skill_packages({
         skill_id: {
             "id": skill_id,
             "name": skill_id,

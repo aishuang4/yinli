@@ -1,6 +1,6 @@
 """按 Agent 组装无人值守能力库存。MCP 与 HTTP 是租户全局，不再按 Project 过滤。禁止 import routes。"""
-
 from __future__ import annotations
+
 
 from types import SimpleNamespace
 from typing import Any, Literal
@@ -12,11 +12,11 @@ from src.scheduler.http_runtime import enabled_http_tools, enabled_knowledge_too
 from src.scheduler.mcp_runtime import mcp_injectable
 from src.scheduler.unattended_policy import agent_approval_policy, skill_package_has_scripts
 from src.security.permissions import ApprovalPolicy, UnifiedPermissionProfile, build_permission_profile
-from src.storage.database import (
+from src.skills.registry import cached_skill_records
+from src.storage.config.json_document_store import list_json_records
+from src.storage.records.resource_catalog_records import (
     list_http_tools,
-    list_json_records,
     list_mcp_servers,
-    list_skills,
 )
 
 KNOWLEDGE_TOOLS_NAMESPACE = "knowledge_tools"
@@ -273,7 +273,7 @@ def _skill_rows(
 ) -> list[CapabilityInventoryItem]:
     selected = {str(item) for item in list(getattr(agent, "skills", None) or [])}
     rows: list[CapabilityInventoryItem] = []
-    for item in list_skills():
+    for item in cached_skill_records():
         skill_id = str(item.get("id") or "")
         if not skill_id or skill_id not in selected:
             continue

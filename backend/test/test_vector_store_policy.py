@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.storage import database
+from src.storage.engine import database
 from src.vector_store.policy import get_vector_store_policy
 from src.vector_store.providers.disabled import DisabledVectorStoreBackend
 from src.vector_store.providers.zvec import ZvecVectorStoreBackend

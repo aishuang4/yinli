@@ -1,11 +1,11 @@
 """工作室生命周期收口：启动对账、删除 Chat session 结束房间。"""
-
 from __future__ import annotations
+
 
 from src.group_studio.events import emit_envelope
 from src.group_studio.interrupt import cancel_active_run
 from src.group_studio.notify import KIND_CIRCUIT, notify_studio
-from src.storage.database import (
+from src.storage.records.group_studio_records import (
     archive_group_studio,
     get_active_group_studio_by_chat_session,
     get_group_studio_snapshot,

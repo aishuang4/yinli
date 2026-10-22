@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from src.storage.database import (
+from src.storage.records.workflow_records import (
     append_workflow_event,
     create_workflow_run,
     get_workflow_run,

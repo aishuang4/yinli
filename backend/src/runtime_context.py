@@ -1,11 +1,14 @@
 """Project 运行时归属解析与上下文模型。"""
-
 from __future__ import annotations
+
 
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from src.storage.database import get_chat_session_location, get_project
+from src.storage.records.project_records import (
+    get_chat_session_location,
+    get_project,
+)
 
 
 @dataclass(frozen=True)

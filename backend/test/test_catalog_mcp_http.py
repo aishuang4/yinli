@@ -1,11 +1,16 @@
 """MCP / HTTP 定义文件化与密钥剥离。"""
 
+from src.storage.records.resource_catalog_records import upsert_http_tool
+from src.storage.records.resource_catalog_records import list_http_tools
+from src.storage.records.resource_catalog_records import replace_mcp_servers
+
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
 from src.catalog.http_files import HttpToolFileRecord, parse_http_yaml, write_http_file
+from src.catalog.secrets import load_http_auth, store_http_auth
 from src.server.routes.tools import HttpToolCreate
 from src.catalog.mcp_files import McpFileRecord, parse_mcp_yaml, write_mcp_file
 from src.catalog.secrets import resolve_headers
@@ -48,14 +53,13 @@ def test_http_yaml_stores_auth_config_in_secret(tmp_path: Path) -> None:
         auth_type="bearer",
         headers={"Accept": "application/json"},
     )
-    write_http_file(path, record, auth_config={"token": "tok-123"})
+    record.auth_ref = store_http_auth(record.id, {"token": "tok-123"})
+    write_http_file(path, record)
     text = path.read_text(encoding="utf-8")
     assert "tok-123" not in text
     assert "auth_config" not in text
     parsed = parse_http_yaml(text, path=path, source_scope="workspace")
-    from src.catalog.http_files import runtime_auth_config
-
-    assert runtime_auth_config(parsed)["token"] == "tok-123"
+    assert load_http_auth(parsed.auth_ref)["token"] == "tok-123"
     assert parsed.headers.get("Accept") == "application/json"
 
 
@@ -83,12 +87,12 @@ def test_mcp_http_migration_exports_sqlite(tmp_path, monkeypatch) -> None:
         is_mcp_catalog_migrated,
     )
     from src.catalog.paths import http_tools_dir, mcp_dir
-    from src.storage import database
-    from src.storage.database import upsert_json_record
+    from src.storage.engine import database
+    from src.storage.config.json_document_store import upsert_json_record
 
     upsert_json_record("catalog", MCP_MIGRATION_KEY, {"status": ""})
     upsert_json_record("catalog", HTTP_MIGRATION_KEY, {"status": ""})
-    database.replace_mcp_servers({
+    replace_mcp_servers({
         "custom-remote": {
             "id": "custom-remote",
             "name": "Remote",
@@ -107,7 +111,7 @@ def test_mcp_http_migration_exports_sqlite(tmp_path, monkeypatch) -> None:
             
         }
     })
-    database.upsert_http_tool({
+    upsert_http_tool({
         "id": "http-mig",
         "name": "Mig",
         "url": "https://example.com/api",
@@ -124,7 +128,7 @@ def test_mcp_http_migration_exports_sqlite(tmp_path, monkeypatch) -> None:
     assert not is_http_catalog_migrated()
     assert not (mcp_dir() / "custom-remote.yaml").exists()
     assert not (http_tools_dir() / "http-mig.yaml").exists()
-    assert any(row["id"] == "http-mig" for row in database.list_http_tools())
+    assert any(row["id"] == "http-mig" for row in list_http_tools())
 
 
 @pytest.mark.anyio

@@ -1,6 +1,6 @@
 """独立审核的 SDK 传输接点；无 Agent 缓存、工具、历史、降级或自动重试。"""
-
 from __future__ import annotations
+
 
 import asyncio
 from dataclasses import dataclass
@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from agentscope.message import SystemMsg, UserMsg
 
 from src.agents.model_factory import create_model
-from src.agents.runtime_types import AgentModelOptions
+from src.agents.model_options import AgentModelOptions
 from src.config.runtime_settings import RuntimeModelBinding, model_binding_scope
 
 

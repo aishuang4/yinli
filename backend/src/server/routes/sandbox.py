@@ -1,6 +1,6 @@
 """Sandbox test case routes."""
-
 from __future__ import annotations
+
 
 import uuid
 from datetime import datetime, timezone
@@ -8,7 +8,12 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from src.storage.database import delete_json_record, get_json_record, list_json_records, upsert_json_record
+from src.storage.config.json_document_store import (
+    delete_json_record,
+    get_json_record,
+    list_json_records,
+    upsert_json_record,
+)
 
 router = APIRouter()
 

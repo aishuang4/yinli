@@ -162,7 +162,7 @@ def _job_file_index(project_slug: str | None) -> dict[str, str]:
             for path in jobs_dir.glob("*.md"):
                 index[path.stem] = str(path)
         if project_slug:
-            from src.storage.database import get_project
+            from src.storage.records.project_records import get_project
 
             project = get_project(project_slug)
             root = Path(str((project or {}).get("primaryPath") or ""))
@@ -245,7 +245,7 @@ def serialize_firing(firing: ScheduledJobRun) -> dict[str, Any]:
     manifest = dict(firing.output_manifest or {})
     result_text = str(manifest.get("resultText") or "").strip()
     if not result_text and firing.chat_session_id:
-        from src.storage.database import get_latest_assistant_chat_message
+        from src.storage.records.chat_session_records import get_latest_assistant_chat_message
 
         record = get_latest_assistant_chat_message(firing.chat_session_id)
         result_text = str((record or {}).get("content") or "").strip()

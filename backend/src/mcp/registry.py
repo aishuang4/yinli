@@ -2,8 +2,8 @@
 
 HTTP 路由留在 src.server.routes.mcp。
 """
-
 from __future__ import annotations
+
 
 import json
 import os
@@ -26,7 +26,8 @@ from src.catalog.migrate_mcp_http import ensure_mcp_file_catalog, is_mcp_catalog
 from src.catalog.paths import mcp_dir
 from src.catalog.secrets import delete_named_secret, resolve_headers
 from src.scheduler.mcp_runtime import resolve_mcp_runtime_servers as _resolve_mcp_runtime_servers
-from src.storage.database import list_mcp_servers as db_list_mcp_servers, replace_mcp_servers
+from src.storage.records.resource_catalog_records import list_mcp_servers as db_list_mcp_servers
+from src.storage.records.resource_catalog_records import replace_mcp_servers
 
 McpTransport = Literal["stdio", "sse", "websocket"]
 McpInstallStatus = Literal["available", "installed", "error"]
@@ -548,5 +549,3 @@ def resolve_mcp_runtime_servers(
         allowed_server_ids=allowed_server_ids,
         builtin_server_ids=set(_builtin_mcp_servers),
     )
-
-

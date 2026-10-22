@@ -4,18 +4,18 @@ from __future__ import annotations
 
 import asyncio
 
-from src.memory.markdown_store import (
+from src.memory.legacy.markdown_files import (
     AGENT_MEMORY_TEMPLATE,
     GLOBAL_MEMORY_TEMPLATE,
     USER_MEMORY_TEMPLATE,
-    MarkdownMemoryStore,
+    LegacyMarkdownStore,
 )
 from src.server.routes import memory as memory_routes
 from src.server.routes.agents import AgentCreate, Guardrails, create_agent
 
 
 def test_read_agent_memory_returns_template_without_creating_file(tmp_path):
-    store = MarkdownMemoryStore(root=tmp_path / "memory")
+    store = LegacyMarkdownStore(root=tmp_path / "memory")
 
     doc = store.read_agent_memory("agent-1")
 
@@ -26,7 +26,7 @@ def test_read_agent_memory_returns_template_without_creating_file(tmp_path):
 
 
 def test_write_agent_memory_creates_file(tmp_path):
-    store = MarkdownMemoryStore(root=tmp_path / "memory")
+    store = LegacyMarkdownStore(root=tmp_path / "memory")
 
     doc = store.write_agent_memory("agent-1", "# Summary\n\n记住中文输出。")
 
@@ -37,7 +37,7 @@ def test_write_agent_memory_creates_file(tmp_path):
 
 
 def test_read_user_memory_returns_template_without_creating_file(tmp_path):
-    store = MarkdownMemoryStore(root=tmp_path / "memory")
+    store = LegacyMarkdownStore(root=tmp_path / "memory")
 
     doc = store.read_user_memory("user-1")
 
@@ -50,7 +50,7 @@ def test_read_user_memory_returns_template_without_creating_file(tmp_path):
 
 
 def test_write_user_memory_creates_file(tmp_path):
-    store = MarkdownMemoryStore(root=tmp_path / "memory")
+    store = LegacyMarkdownStore(root=tmp_path / "memory")
 
     doc = store.write_user_memory("user-1", "# Summary\n\n用户偏好中文。")
 
@@ -62,7 +62,7 @@ def test_write_user_memory_creates_file(tmp_path):
 
 
 def test_read_global_memory_returns_template_without_creating_file(tmp_path):
-    store = MarkdownMemoryStore(root=tmp_path / "memory")
+    store = LegacyMarkdownStore(root=tmp_path / "memory")
 
     doc = store.read_global_memory()
 
@@ -75,7 +75,7 @@ def test_read_global_memory_returns_template_without_creating_file(tmp_path):
 
 
 def test_write_global_memory_creates_file(tmp_path):
-    store = MarkdownMemoryStore(root=tmp_path / "memory")
+    store = LegacyMarkdownStore(root=tmp_path / "memory")
 
     doc = store.write_global_memory("# Summary\n\n全局默认中文。")
 
@@ -89,7 +89,7 @@ def test_write_global_memory_creates_file(tmp_path):
 def test_agent_create_does_not_create_markdown_memory(tmp_path, monkeypatch):
     from src.memory import markdown_store
     from src.server.routes import agents as agents_routes
-    from src.storage import database
+    from src.storage.engine import database
 
     monkeypatch.setattr(markdown_store, "memory_root", lambda: tmp_path / "data" / "memory")
     monkeypatch.setattr(agents_routes, "_agents", {})
@@ -197,7 +197,7 @@ def test_default_global_markdown_route_uses_single_global_memory(tmp_path, monke
 
 
 def test_default_memory_paths_use_descriptive_file_names(tmp_path):
-    store = MarkdownMemoryStore(root=tmp_path / "memory")
+    store = LegacyMarkdownStore(root=tmp_path / "memory")
 
     user = store.write_user_memory("default", "# Summary\n\n用户。")
     agent = store.write_agent_memory("default", "# Summary\n\nAgent。")

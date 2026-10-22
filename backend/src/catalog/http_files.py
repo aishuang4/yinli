@@ -1,6 +1,6 @@
 """HTTP 工具定义 YAML 编解码与发现。只扫描租户 `tools/` 目录。"""
-
 from __future__ import annotations
+
 
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -10,10 +10,8 @@ import yaml
 
 from src.catalog.paths import ID_PATTERN, atomic_write_text, http_tools_dir
 from src.catalog.secrets import (
-    load_http_auth,
     redact_headers,
     split_headers,
-    store_http_auth,
     yaml_has_plaintext_secrets,
 )
 from src.catalog.system_defaults import utc_now
@@ -122,21 +120,17 @@ def parse_http_yaml(
     )
 
 
-def write_http_file(path: Path, record: HttpToolFileRecord, *, auth_config: dict[str, Any] | None = None) -> HttpToolFileRecord:
+def write_http_file(path: Path, record: HttpToolFileRecord) -> HttpToolFileRecord:
+    """剥离敏感请求头后原子写入。认证配置由调用方先经 `store_http_auth` 写入密钥库。"""
+
     public, refs = split_headers(record.headers, server_id=record.id)
     record.headers = public
     record.header_refs = {**dict(record.header_refs), **refs}
-    if auth_config is not None:
-        record.auth_ref = store_http_auth(record.id, auth_config)
     record.updated_at = utc_now()
     if not record.created_at:
         record.created_at = record.updated_at
     atomic_write_text(path, dump_http_yaml(record))
     return record
-
-
-def runtime_auth_config(record: HttpToolFileRecord) -> dict[str, Any]:
-    return load_http_auth(record.auth_ref)
 
 
 def _scan_dir(directory: Path, *, source_scope: str) -> list[HttpToolFileRecord]:

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from src.storage.permission_records import PermissionRecordStore
+from src.storage.records.permission_records import PermissionRecordStore
 from src.tenancy.context import current_tenant
 from src.tools.scoped_paths import resolve_workspace_path
 

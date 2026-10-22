@@ -270,7 +270,7 @@ def test_explicit_subagent_name_must_be_unambiguous():
 
 def test_migration_preserves_instances_and_does_not_repeat(monkeypatch):
     from src.config import secret_store
-    from src.storage import database
+    from src.storage.engine import database
 
     records = {
         "model": {
@@ -488,7 +488,7 @@ def test_concurrent_process_save_only_one_revision_wins():
 
 def test_unreadable_legacy_key_does_not_delete_old_configuration(monkeypatch):
     from src.config import secret_store
-    from src.storage import database
+    from src.storage.engine import database
 
     old = {
         "provider": "deepseek",

@@ -46,7 +46,7 @@ class DomainEventRepository:
 
     def __init__(self, *, ensure_db=None, connect=None, lock=None) -> None:
         if ensure_db is None or connect is None or lock is None:
-            from src.storage import database
+            from src.storage.engine import database
 
             ensure_db = ensure_db or database.ensure_db
             connect = connect or database._connect

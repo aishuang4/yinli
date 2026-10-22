@@ -28,7 +28,7 @@ def hosted_env(tmp_path, monkeypatch):
     from cryptography.fernet import Fernet
 
     from src.config import runtime_paths
-    from src.storage import control_db
+    from src.storage.control import control_db
 
     root = make_hosted_root(tmp_path)
     control_db.forget_control_db()
@@ -52,7 +52,7 @@ def make_user(client, email: str) -> tuple[str, str]:
     """注册、验证、登录；返回 (token, user_id)。"""
 
     from src.server.auth import service
-    from src.storage import auth_records
+    from src.storage.control import auth_records
 
     sent: list[str] = []
     original = service.deliver_login_code

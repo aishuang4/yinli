@@ -1,6 +1,6 @@
 """階段 3：ConfirmJob 三源凍結與 firing 的檔案雜湊校驗。"""
-
 from __future__ import annotations
+
 
 import asyncio
 from pathlib import Path
@@ -10,7 +10,8 @@ import pytest
 
 from src.runtime.capabilities import SkillManifestError, freeze_job_skills, resolve_capabilities
 from src.skills.registry import _upsert_external_override, reload_skill_cache
-from src.storage.database import ensure_db, replace_skills
+from src.skills.registry import write_skill_packages
+from src.storage.engine.database import ensure_db
 
 
 @pytest.fixture()
@@ -18,13 +19,13 @@ def isolated_db(tmp_path, monkeypatch):
     monkeypatch.setattr("src.config.runtime_paths.USER_DATA_ROOT", tmp_path / "user-data")
     ensure_db()
     yield
-    from src.storage import database
+    from src.storage.engine import database
 
     database.forget_db(database.db_path())
 
 
 def _install(skill_id: str, *, body: str = "步驟") -> None:
-    replace_skills({
+    write_skill_packages({
         skill_id: {
             "id": skill_id,
             "name": skill_id,
@@ -159,7 +160,9 @@ def test_confirm_firing_trace_then_hash_change_pauses(isolated_db, monkeypatch):
     from src.server.routes.chat.initial_events import emit_start_events
     from src.server.routes.chat.models import ChatMessage
     from src.server.routes.chat.run_context import build_run_context
-    from src.storage.database import get_project, list_run_events, list_user_notifications
+    from src.storage.records.project_records import get_project
+    from src.storage.records.trace_records import list_run_events
+    from src.storage.records.scheduled_job_records import list_user_notifications
 
     _install("report-skill", body="寫周報\n")
     monkeypatch.setattr(

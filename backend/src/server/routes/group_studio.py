@@ -39,33 +39,26 @@ from src.group_studio.models import (
     Membership,
     TaskCard,
 )
-from src.group_studio.service import (
-    add_member,
-    decide_studio_approval,
-    from_chat,
-    get_studio,
-    get_studio_by_chat_session,
-    interrupt_run,
-    list_studio_files,
-    list_invitable_agents,
-    update_studio_model,
-    resolve_studio_file,
-    list_studio_messages,
-    list_studios,
-    mute_member,
-    pause_studio,
-    post_human_message,
-    remove_member,
-    rerun_last_turn,
-    resume_studio,
+from src.group_studio.access import get_studio
+from src.group_studio.approvals import decide_approval as decide_studio_approval
+from src.group_studio.artifacts import list_studio_files, resolve_studio_file, upload_studio_file
+from src.group_studio.members import add_member, list_invitable_agents, mute_member, remove_member
+from src.group_studio.rooms import (
     close_studio as close_group_studio,
     delete_studio,
+    from_chat,
+    get_studio_by_chat_session,
+    list_studio_messages,
+    list_studios,
+    pause_studio,
+    resume_studio,
+    update_studio_model,
     update_task_card,
-    upload_studio_file,
 )
+from src.group_studio.speaking import interrupt_run, post_human_message, rerun_last_turn
 from src.group_studio.settings import is_group_studio_enabled
 from src.group_studio.stream import format_sse, heartbeat_comment, subscribe
-from src.storage.database import (
+from src.storage.records.group_studio_records import (
     get_group_studio_max_event_seq,
     get_group_studio_snapshot,
     list_group_studio_events_after,

@@ -22,7 +22,7 @@ from src.server.auth.service import (
     reset_password,
     verify_email,
 )
-from src.storage.auth_records import SESSION_TTL
+from src.storage.control.auth_records import SESSION_TTL
 
 SESSION_COOKIE = "yinli_session"
 

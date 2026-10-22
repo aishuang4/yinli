@@ -1,6 +1,6 @@
 """Chat Trace Observation：Runtime 开闭与按 Run 的 API。"""
-
 from __future__ import annotations
+
 
 import asyncio
 from datetime import datetime, timedelta, timezone
@@ -15,8 +15,9 @@ from src.server.routes.chat.observation_runtime import (
     open_run_root,
 )
 from src.server.routes.traces import router as traces_router
-from src.storage import database
-from src.storage.database import list_trace_observations, upsert_chat_run
+from src.storage.engine import database
+from src.storage.records.chat_run_records import upsert_chat_run
+from src.storage.records.observation_records import list_trace_observations
 
 
 @pytest.fixture

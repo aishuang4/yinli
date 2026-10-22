@@ -1,6 +1,6 @@
 """models.json 唯一配置源、原子保存及一次性旧配置迁移。"""
-
 from __future__ import annotations
+
 
 import hashlib
 import json
@@ -8,6 +8,7 @@ import os
 import subprocess
 import tempfile
 from contextlib import contextmanager
+from collections.abc import Iterable
 from pathlib import Path
 from threading import RLock, local
 from typing import Literal
@@ -69,6 +70,23 @@ def _locked():
 
 class CatalogError(ValueError):
     """可向用户展示的配置错误，不能包含原始配置或 Key。"""
+
+
+def assert_model_urls_public(base_urls: Iterable[str]) -> None:
+    """调用前再挡一次指向本机或内网的模型地址。桌面模式不检查。"""
+
+    from src.security.egress import EgressBlocked, assert_public_url_sync, egress_enforced
+
+    if not egress_enforced():
+        return
+    for raw in base_urls:
+        url = str(raw or "").strip()
+        if not url:
+            continue
+        try:
+            assert_public_url_sync(url, purpose="model")
+        except EgressBlocked as exc:
+            raise CatalogError("模型地址不能指向内网或本机") from exc
 
 
 class CatalogConflict(CatalogError):
@@ -288,14 +306,10 @@ def _write(catalog: ModelCatalog) -> None:
 
 
 def _migrate() -> ModelCatalog:
-    from src.config.legacy_model_settings import (
-        LEGACY_PROVIDER_ADAPTERS,
-        MODEL_PROVIDERS,
-        ModelProvider,
-    )
+    from src.config.legacy_model_settings import LEGACY_PROVIDER_ADAPTERS, MODEL_PROVIDERS, ModelProvider
     from src.config.secret_store import SecretStoreError, get_model_api_key
     from src.config.settings import settings
-    from src.storage.database import get_json_record
+    from src.storage.config.json_document_store import get_json_record
 
     old = get_json_record("system_settings", "model") or {}
     selected = str(old.get("provider") or "deepseek")
@@ -383,7 +397,7 @@ def _migrate() -> ModelCatalog:
 def read_catalog() -> tuple[ModelCatalog, str]:
     """每次读取磁盘；迁移标记防止文件删除后复活旧 Key。"""
     with _locked():
-        from src.storage.database import get_json_record, upsert_json_record
+        from src.storage.config.json_document_store import get_json_record, upsert_json_record
 
         if not models_path().exists():
             marker = get_json_record("system_settings", "models_file_migrated")

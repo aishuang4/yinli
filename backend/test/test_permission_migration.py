@@ -1,5 +1,8 @@
 """隔离租户上的权限迁移与回滚，不接触真实用户配置。"""
 
+from src.storage.records.chat_run_records import upsert_chat_run
+from src.storage.records.project_records import create_project
+
 import json
 from pathlib import Path
 
@@ -12,7 +15,7 @@ from src.scheduler.service import ScheduledJobService
 from src.security.authorization.migration import (
     legacy_task_mode, migrate_permission_configuration, rollback_permission_configuration,
 )
-from src.storage import database
+from src.storage.engine import database
 
 
 @pytest.mark.parametrize("source,expected", [
@@ -42,7 +45,7 @@ def test_migration_backups_idempotence_and_configuration_rollback(tmp_path):
     database.ensure_db()
     project = tmp_path / "project"
     project.mkdir()
-    created = database.create_project({"name": "迁移测试", "primaryPath": str(project)})
+    created = create_project({"name": "迁移测试", "primaryPath": str(project)})
     profiles = agents_root() / "profiles"
     trusted = profiles / "trusted.md"
     original = _file(trusted, {"id": "trusted", "guardrails": {"tool_permission_mode": "bypass", "network_enabled": False}})
@@ -92,7 +95,7 @@ def test_migration_backups_idempotence_and_configuration_rollback(tmp_path):
 
 def test_migration_requires_no_active_run():
     database.ensure_db()
-    database.upsert_chat_run({"id": "busy", "sessionId": "session"})
+    upsert_chat_run({"id": "busy", "sessionId": "session"})
     with pytest.raises(ValueError, match="活跃 Run"):
         migrate_permission_configuration()
 

@@ -1,6 +1,8 @@
 """Project slug、默认项目与目录授权回归。"""
-
 from __future__ import annotations
+
+from src.storage.records.project_records import add_project_folder
+
 
 import asyncio
 from io import BytesIO
@@ -34,7 +36,7 @@ from src.server.routes.chat.handlers.sessions import delete_session, list_sessio
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.run_context import build_chat_run_context
 from src.server.routes.chat.runtime import scope_guardrails_to_project
-from src.storage.agent_defaults import is_stale_desktop_default_project_path
+from src.storage.config.agent_defaults import is_stale_desktop_default_project_path
 from src.server.routes.chat.store import _append_user_message
 from src.server.routes.projects import (
     ProjectCreateRequest,
@@ -43,23 +45,29 @@ from src.server.routes.projects import (
     add_project_folder_record,
     create_project_record,
 )
-from src.storage import database
-from src.storage.database import (
+from src.storage.engine import database
+from src.storage.engine.database import (
     DEFAULT_PROJECT_ID,
-    append_run_event,
-    create_project,
-    create_subagent_invocation,
     ensure_db,
-    get_chat_session_location,
-    get_project,
+)
+from src.catalog.loader import import_sqlite_agent_record
+from src.storage.records.chat_run_records import (
     list_chat_runs,
-    list_memory_nodes,
-    list_projects,
-    list_subagent_invocations,
-    upsert_agent,
     upsert_chat_run,
 )
-from src.storage.project_records import ProjectNameError
+from src.storage.records.memory_records import list_memory_nodes
+from src.storage.records.project_records import (
+    create_project,
+    get_chat_session_location,
+    get_project,
+    list_projects,
+)
+from src.storage.records.trace_records import (
+    append_run_event,
+    create_subagent_invocation,
+    list_subagent_invocations,
+)
+from src.storage.records.project_records import ProjectNameError
 
 
 @pytest.fixture()
@@ -518,20 +526,20 @@ def test_project_folders_record_directory_grants(isolated_db, tmp_path):
     later = tmp_path / "later"
     later.mkdir()
     project = _create_project(tmp_path, name="Folders")
-    updated = database.add_project_folder(project["slug"], str(later), "read")
+    updated = add_project_folder(project["slug"], str(later), "read")
     assert updated is not None
     modes = {item["path"]: item["accessMode"] for item in updated["folders"]}
     assert modes[project["primaryPath"]] == "readwrite"
     assert modes[str(later.resolve())] == "read"
     with pytest.raises(ProjectNameError):
-        database.add_project_folder(project["slug"], str(tmp_path / "missing"), "read")
+        add_project_folder(project["slug"], str(tmp_path / "missing"), "read")
 
 
 def test_directory_grant_intersects_agent_scope(isolated_db, tmp_path):
     """运行时目录授权是 Project folders 与 Agent scope 的交集，不再查 binding。"""
 
     project = _create_project(tmp_path, name="Access")
-    upsert_agent({"id": "agent-access", "name": "Agent", "system_prompt": "prompt"})
+    import_sqlite_agent_record({"id": "agent-access", "name": "Agent", "system_prompt": "prompt"})
     context = resolve_runtime_context(
         project_slug=project["slug"],
         session_id="session-access",
@@ -563,16 +571,16 @@ def test_unknown_directory_grant_is_rejected(isolated_db, tmp_path):
 
     project = _create_project(tmp_path, name="Grant")
     with pytest.raises(ProjectNameError):
-        database.add_project_folder(project["slug"], "relative/path", "read")
+        add_project_folder(project["slug"], "relative/path", "read")
     with pytest.raises(ProjectNameError):
-        database.add_project_folder(project["slug"], str(tmp_path / "nope"), "write")
+        add_project_folder(project["slug"], str(tmp_path / "nope"), "write")
 
 
 def test_chat_run_context_keeps_enabled_skills_without_binding(isolated_db, tmp_path, monkeypatch):
     """Chat 组装不再按 Project binding 裁剪 Skill / MCP / HTTP。"""
 
     project = _create_project(tmp_path, name="Chat Resources")
-    upsert_agent({
+    import_sqlite_agent_record({
         "id": "agent-chat",
         "name": "Chat Agent",
         "system_prompt": "system",

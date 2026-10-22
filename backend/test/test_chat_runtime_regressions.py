@@ -1,10 +1,12 @@
+from src.storage.records.chat_session_records import list_chat_messages
+from src.storage.records.chat_session_records import append_chat_message
+from src.storage.records.chat_session_records import insert_chat_session_if_absent
+from src.storage.records.chat_session_records import get_chat_session
 import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
-
 from pydantic import ValidationError
-
 from src.server.routes.chat import background_runs as background_runs_module
 from src.server.routes.chat import store as chat_store_module
 from src.server.routes.chat.background_runs import (
@@ -45,7 +47,7 @@ from src.server.routes.chat.run_context import ChatRunContext
 from src.server.routes.chat.run_context import build_chat_run_context
 from src.agents.factory import _safe_workspace_dir
 from src.config.runtime_paths import project_default_root
-from src.storage.database import _normalize_guardrails
+from src.storage.config.agent_defaults import _normalize_guardrails
 from src.server.routes.chat.runtime_builder import (
     RuntimeModelConfig,
     build_main_agent_runtime_spec,
@@ -3069,10 +3071,10 @@ def test_background_run_resume_relay_marks_original_run_completed(monkeypatch):
 def test_final_snapshot_replaces_same_run_waiting_placeholder():
     """同一 Run 完成后，历史消息只能保留一棵最终 Block Tree。"""
 
-    from src.storage import database
+    from src.storage.engine import database
 
     root_id = "message:run-resume-history"
-    database.insert_chat_session_if_absent({
+    insert_chat_session_if_absent({
         "id": "session-resume-history",
         "title": "恢复",
         "agent_id": "default",
@@ -3080,7 +3082,7 @@ def test_final_snapshot_replaces_same_run_waiting_placeholder():
         "created_at": "2026-07-23T00:00:00+00:00",
         "updated_at": "2026-07-23T00:00:00+00:00",
     })
-    database.append_chat_message("session-resume-history", {
+    append_chat_message("session-resume-history", {
         "id": "waiting-placeholder",
         "role": "assistant",
         "content": "",
@@ -3095,7 +3097,7 @@ def test_final_snapshot_replaces_same_run_waiting_placeholder():
             },
         },
     })
-    database.append_chat_message("session-resume-history", {
+    append_chat_message("session-resume-history", {
         "id": "final-answer",
         "role": "assistant",
         "content": "完成",
@@ -3117,10 +3119,10 @@ def test_final_snapshot_replaces_same_run_waiting_placeholder():
         min_created_at="2026-07-23T00:00:00+00:00",
     )
 
-    messages = database.list_chat_messages("session-resume-history")
+    messages = list_chat_messages("session-resume-history")
     assert [item["id"] for item in messages] == ["final-answer"]
     assert messages[0]["displaySnapshot"] == final_snapshot
-    assert database.get_chat_session("session-resume-history")["message_count"] == 1
+    assert get_chat_session("session-resume-history")["message_count"] == 1
 
 
 def test_background_run_resume_relay_preserves_failed_terminal_status():

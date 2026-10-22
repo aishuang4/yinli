@@ -3,8 +3,8 @@
 YAML/Markdown 继续定义 Subagent 能力；本模块只把父 Agent 工具命令转换为文件任务、
 Supervisor 执行和结果消费状态。
 """
-
 from __future__ import annotations
+
 
 import asyncio
 import json
@@ -23,7 +23,7 @@ from src.agents.runtime_types import (
 )
 from src.exception_detail import format_agent_exception
 from src.runtime_context import RuntimeContext
-from src.storage.database import (
+from src.storage.records.trace_records import (
     append_subagent_transcript_item,
     update_subagent_invocation_delivery,
 )

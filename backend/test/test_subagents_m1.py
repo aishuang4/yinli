@@ -1,5 +1,13 @@
 """Subagent M1 定义加载、工具策略和审计回归测试。"""
 
+from src.storage.records.trace_records import list_subagent_transcript_items
+from src.storage.records.trace_records import count_subagent_transcript_items
+from src.storage.records.trace_records import append_subagent_transcript_item
+from src.storage.records.trace_records import get_subagent_invocation
+from src.storage.records.trace_records import list_subagent_invocations
+from src.storage.records.trace_records import update_subagent_invocation
+from src.storage.records.trace_records import create_subagent_invocation
+
 import asyncio
 import json
 import sqlite3
@@ -23,7 +31,7 @@ from src.server.routes.chat.models import (
     PENDING_AGENTS,
     PENDING_INTERACTIONS,
 )
-from src.storage import database
+from src.storage.engine import database
 from src.subagents.manager import SubagentDelegationManager
 from src.subagents.loader import load_subagent_file
 from src.subagents.models import SubagentCatalog, SubagentDefinition
@@ -539,7 +547,7 @@ def test_delegation_manager_emits_started_and_completed_events(tmp_path: Path, m
         return fork, result, manager.drain_runtime_events()
 
     fork, result, events = asyncio.run(run_case())
-    invocations = database.list_subagent_invocations(run_id="run-1")
+    invocations = list_subagent_invocations(run_id="run-1")
 
     assert fork["mode"] == "attached"
     assert "No blocking findings." in result
@@ -667,7 +675,7 @@ def test_multiple_attached_children_can_run_in_parallel(tmp_path: Path, monkeypa
 
     invocation_ids = asyncio.run(run_case())
     assert len(set(invocation_ids)) == 2
-    assert all(item["status"] == "completed" for item in database.list_subagent_invocations(run_id="run-parallel"))
+    assert all(item["status"] == "completed" for item in list_subagent_invocations(run_id="run-parallel"))
 
 
 def test_cancelling_attached_child_writes_consumable_result(tmp_path: Path, monkeypatch) -> None:
@@ -716,7 +724,7 @@ def test_cancelling_attached_child_writes_consumable_result(tmp_path: Path, monk
         })
         fork = json.loads(fork_result.output[0].text)  # type: ignore[attr-defined]
         await entered.wait()
-        invocation = database.list_subagent_invocations(run_id="run-cancel")[0]
+        invocation = list_subagent_invocations(run_id="run-cancel")[0]
         assert await get_subagent_supervisor().cancel(invocation["id"])
         await manager.wait_tasks([fork["invocationId"]])
         result = manager.read_result(fork["invocationId"], tool_call_id="read-cancelled")
@@ -724,7 +732,7 @@ def test_cancelling_attached_child_writes_consumable_result(tmp_path: Path, monk
         return result, invocation
 
     result, invocation = asyncio.run(cancel_child())
-    settled = database.get_subagent_invocation(invocation["id"])
+    settled = get_subagent_invocation(invocation["id"])
 
     assert "已取消" in result
     assert settled is not None
@@ -764,7 +772,7 @@ def test_delegation_manager_settles_setup_failure_as_readable_result(tmp_path: P
         return manager.read_result(fork["invocationId"], tool_call_id="read-failure")
 
     result = asyncio.run(run_case())
-    invocations = database.list_subagent_invocations(run_id="run-1")
+    invocations = list_subagent_invocations(run_id="run-1")
 
     assert "invalid child tool scope" in result
     assert invocations[0]["status"] == "failed"
@@ -924,23 +932,23 @@ def test_subagent_runner_uses_restricted_finalization_after_max_iters(monkeypatc
 def test_subagent_transcript_is_ordered_by_invocation(tmp_path: Path, monkeypatch) -> None:
     """M3 transcript 必须以 invocation 内的稳定 seq 作为事实顺序。"""
 
-    invocation = database.create_subagent_invocation({
+    invocation = create_subagent_invocation({
         "run_id": "run-1", "session_id": "session-1", "parent_agent_id": "agent-1",
         "parent_agent_name": "Agent", "subagent_name": "reviewer", "status": "running", "task": "Review.",
     })
-    first = database.append_subagent_transcript_item(
+    first = append_subagent_transcript_item(
         invocation_id=invocation["id"], kind="SUBAGENT_STARTED", payload={"taskPreview": "Review."},
     )
-    second = database.append_subagent_transcript_item(
+    second = append_subagent_transcript_item(
         invocation_id=invocation["id"], kind="AGENT_STARTED", payload={},
     )
 
-    items = database.list_subagent_transcript_items(invocation["id"])
+    items = list_subagent_transcript_items(invocation["id"])
 
     assert [item["seq"] for item in items] == [1, 2]
     assert [item["id"] for item in items] == [first["id"], second["id"]]
-    assert database.count_subagent_transcript_items(invocation["id"]) == 2
-    page = database.list_subagent_transcript_items(invocation["id"], limit=1, offset=0)
+    assert count_subagent_transcript_items(invocation["id"]) == 2
+    page = list_subagent_transcript_items(invocation["id"], limit=1, offset=0)
     assert [item["seq"] for item in page] == [1]
 
 
@@ -1022,7 +1030,7 @@ def test_delegation_manager_marks_subagent_waiting_on_hitl(tmp_path: Path, monke
 
     result, waited = asyncio.run(run_case())
     events = manager.drain_runtime_events()
-    invocations = database.list_subagent_invocations(run_id="run-1")
+    invocations = list_subagent_invocations(run_id="run-1")
 
     assert result["mode"] == "attached"
     assert waited["tasks"][0]["status"] == "waiting"
@@ -1075,7 +1083,7 @@ def test_resume_subagent_pending_interaction_completes_invocation(tmp_path: Path
     )
     task_store.set_status(invocation_id, "running")
     task_store.set_status(invocation_id, "waiting", error="approval required")
-    invocation = database.create_subagent_invocation(
+    invocation = create_subagent_invocation(
         {
             "id": invocation_id,
             "run_id": "run-1",
@@ -1148,7 +1156,7 @@ def test_resume_subagent_pending_interaction_completes_invocation(tmp_path: Path
         )
 
     output = asyncio.run(collect_resume_events())
-    invocations = database.list_subagent_invocations(run_id="run-1")
+    invocations = list_subagent_invocations(run_id="run-1")
     file_status = task_store.status(invocation_id)
 
     assert "SUBAGENT_COMPLETED" in output
@@ -1283,7 +1291,7 @@ def test_permission_mode_bypass_cannot_exceed_parent_read_only() -> None:
 
 def test_subagent_invocation_audit_create_update_and_list(tmp_path: Path, monkeypatch) -> None:
 
-    created = database.create_subagent_invocation(
+    created = create_subagent_invocation(
         {
             "run_id": "run-audit",
             "session_id": "session-audit",
@@ -1298,12 +1306,12 @@ def test_subagent_invocation_audit_create_update_and_list(tmp_path: Path, monkey
             "expected_output": "Findings.",
         }
     )
-    updated = database.update_subagent_invocation(
+    updated = update_subagent_invocation(
         created["id"],
         status="completed",
         result_preview="No blocking findings.",
     )
-    by_run = database.list_subagent_invocations(run_id="run-audit")
+    by_run = list_subagent_invocations(run_id="run-audit")
 
     assert updated is not None
     assert updated["status"] == "completed"
@@ -1369,7 +1377,7 @@ def test_unrecognized_background_input_cannot_change_attached_semantics(tmp_path
 
     assert observation["ok"] is True
     assert observation["mode"] == "attached"
-    assert database.list_subagent_invocations(run_id="run-background")[0]["executionMode"] == "attached"
+    assert list_subagent_invocations(run_id="run-background")[0]["executionMode"] == "attached"
 
 
 def test_legacy_subagent_agent_columns_are_removed_on_db_startup(tmp_path: Path, monkeypatch) -> None:

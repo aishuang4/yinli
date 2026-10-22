@@ -6,7 +6,7 @@ import time
 from collections.abc import AsyncIterator
 from typing import TypeVar
 
-from src.storage import auth_records
+from src.storage.control import auth_records
 
 T = TypeVar("T")
 _TOUCH_INTERVAL_SECONDS = 25.0

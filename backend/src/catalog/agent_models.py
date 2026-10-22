@@ -1,6 +1,6 @@
 """持久 Agent 的 Pydantic 模型。供 catalog 与 HTTP 路由共用，避免 catalog import routes。"""
-
 from __future__ import annotations
+
 
 from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
@@ -120,29 +120,3 @@ class AgentResponse(BaseModel):
         return is_system_agent_id(self.id)
 
     model_config = {"populate_by_name": True, "extra": "ignore"}
-
-
-class AgentExportPackage(BaseModel):
-    """Portable Agent export package."""
-
-    schema_version: str = Field(default="agent-workstation.agent.v1", alias="schemaVersion")
-    exported_at: str = Field(alias="exportedAt")
-    agent: AgentResponse
-
-    model_config = {"populate_by_name": True}
-
-
-class AgentImportRequest(BaseModel):
-    """Import one Agent from a portable package."""
-
-    package: AgentExportPackage
-    conflict_strategy: str = Field(default="new_id", alias="conflictStrategy")
-
-    model_config = {"populate_by_name": True}
-
-
-class AgentImportResponse(BaseModel):
-    """Result of importing one Agent."""
-
-    agent: AgentResponse
-    warnings: list[str] = Field(default_factory=list)

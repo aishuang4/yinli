@@ -1,5 +1,9 @@
 """Chat 公开组装的真实 SDK/持久审批/文件结果回归，不调用真实模型。"""
 
+from src.storage.records.chat_run_records import upsert_chat_run
+from src.storage.records.project_records import update_project
+from src.storage.records.project_records import create_project
+
 from types import SimpleNamespace
 
 import pytest
@@ -17,7 +21,7 @@ from src.server.routes.chat.authorization_display import public_authorization_ev
 from src.server.routes.chat.background_runs import CURRENT_BACKGROUND_RUN_ID
 from src.server.routes.chat.hitl import _build_resume_event, _create_pending_interaction, _hitl_payload
 from src.server.routes.chat.models import ChatResumeRequest
-from src.storage import database
+from src.storage.engine import database
 from src.tools.scoped_write import ScopedWrite
 from test.authorization_fakes import collect, make_agent, run_async
 
@@ -26,11 +30,11 @@ async def chat_runtime(tmp_path, monkeypatch, mode="manual", plan=None):
     database.ensure_db()
     from src.server.routes import agents
     await agents.update_agent("default", agents.AgentUpdate(guardrails=agents.Guardrails(filesystem_scope=str(tmp_path))))
-    project = database.create_project({"name": "权限验证", "primaryPath": str(tmp_path)})
+    project = create_project({"name": "权限验证", "primaryPath": str(tmp_path)})
     project_slug = project["slug"]
     context = resolve_runtime_context(project_slug=project_slug, session_id="approval-session", run_id="approval-run", agent_id="default")
     metadata = RunAuthorizationMetadata(tenantId="local", approvalMode=mode)
-    database.upsert_chat_run({"id": context.run_id, "projectSlug": project_slug,
+    upsert_chat_run({"id": context.run_id, "projectSlug": project_slug,
                               "sessionId": context.session_id, "agentId": "default",
                               "authorization": metadata.model_dump(mode="json", by_alias=True)})
 
@@ -94,7 +98,7 @@ async def test_full_access_cannot_override_current_capability_or_plan(tmp_path, 
         from src.server.routes import agents
         await agents.update_agent("default", agents.AgentUpdate(guardrails=agents.Guardrails(filesystem_scope=str(tmp_path), network_enabled=False)))
     elif changed == "archived":
-        database.update_project(ctx.runtime_context.project_slug, {"status": "archived"})
+        update_project(ctx.runtime_context.project_slug, {"status": "archived"})
     await collect(agent._execute_tool_call(call))
     assert not (tmp_path / "report.md").exists()
 
@@ -123,7 +127,7 @@ async def test_capability_version_ignores_project_metadata_and_skill_body(tmp_pa
         "---\nname: demo\ndescription: demo skill\n---\noriginal\n", encoding="utf-8",
     )
     before = (await reader()).version
-    database.update_project(ctx.runtime_context.project_slug, {"color": "#112233"})
+    update_project(ctx.runtime_context.project_slug, {"color": "#112233"})
     (skill_dir / "SKILL.md").write_text(
         "---\nname: demo\ndescription: demo skill\n---\nupdated\n", encoding="utf-8",
     )

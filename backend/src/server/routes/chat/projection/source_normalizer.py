@@ -30,7 +30,7 @@ def _tool_input_preview(data: dict[str, Any]) -> str:
 def _permission_facts(decisions: object) -> list[dict[str, str]]:
     """展示快照和 Trace 使用同一条权限投影。"""
 
-    from src.storage.permission_records import project_permission_fact
+    from src.storage.records.permission_records import project_permission_fact
 
     if not isinstance(decisions, list):
         return []

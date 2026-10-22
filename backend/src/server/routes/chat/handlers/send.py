@@ -39,7 +39,7 @@ from src.server.routes.chat.projection.source_events import SourceEvent
 from src.config.product_features import is_surface_enabled
 from src.config.runtime_settings import resolve_model_binding
 from src.runtime.chat_session import find_chat_session
-from src.storage.database import update_chat_session
+from src.storage.records.chat_session_records import update_chat_session
 
 
 @router.post("/send")

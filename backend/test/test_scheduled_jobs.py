@@ -1,6 +1,9 @@
 """定时任务 schema、session kind、weekly/once 调度与状态机回归。"""
-
 from __future__ import annotations
+
+from src.storage.records.chat_session_records import insert_chat_session_if_absent
+from src.storage.records.chat_session_records import get_chat_session
+
 
 import json
 from datetime import datetime, timedelta, timezone
@@ -30,17 +33,19 @@ from src.scheduler.capability_contract import JobCapabilityContract
 from src.scheduler.firing_toolkit import assemble_scheduled_firing_toolkit_spec
 from src.scheduler.settings import is_scheduled_jobs_enabled
 from src.server.routes.chat.models import ChatSession, ChatStore
-from src.storage import database
-from src.storage.database import (
+from src.storage.engine import database
+from src.skills.registry import write_skill_packages
+from src.storage.engine.database import (
     DEFAULT_PROJECT_ID,
     ensure_db,
+)
+from src.catalog.loader import import_sqlite_agent_record
+from src.storage.records.chat_run_records import (
     get_chat_run,
-    list_user_notifications,
-    replace_skills,
-    upsert_agent,
     upsert_chat_run,
 )
-from src.storage.database_schema import BASE_SCHEMA_SQL
+from src.storage.records.scheduled_job_records import list_user_notifications
+from src.storage.engine.database_schema import BASE_SCHEMA_SQL
 
 
 @pytest.fixture()
@@ -59,7 +64,7 @@ def _service() -> ScheduledJobService:
 
 
 def _ensure_agent(agent_id: str) -> None:
-    upsert_agent({
+    import_sqlite_agent_record({
         "id": agent_id,
         "name": agent_id,
         "system_prompt": "prompt",
@@ -68,7 +73,7 @@ def _ensure_agent(agent_id: str) -> None:
 
 
 def _ensure_skill(skill_id: str) -> None:
-    replace_skills({
+    write_skill_packages({
         skill_id: {
             "id": skill_id,
             "name": skill_id,
@@ -809,7 +814,7 @@ def test_schema_tables_and_unique_indexes_exist(isolated_db):
 
 def test_chat_session_kind_survives_insert(isolated_db):
     ensure_db()
-    database.insert_chat_session_if_absent({
+    insert_chat_session_if_absent({
         "id": "sess-job",
         "title": "定时执行",
         "agent_id": "agent-1",
@@ -820,7 +825,7 @@ def test_chat_session_kind_survives_insert(isolated_db):
         "created_at": "2026-08-21T00:00:00+00:00",
         "updated_at": "2026-08-21T00:00:00+00:00",
     })
-    loaded = database.get_chat_session("sess-job")
+    loaded = get_chat_session("sess-job")
     assert loaded["kind"] == "scheduled_job"
     assert ChatStore.model_validate({"sessions": [loaded], "messages": {}}).sessions[0].kind == "scheduled_job"
 
@@ -831,7 +836,7 @@ def test_session_without_extra_columns_stays_in_chat_history(isolated_db):
     from src.runtime.chat_session import find_chat_session
 
     ensure_db()
-    database.insert_chat_session_if_absent({
+    insert_chat_session_if_absent({
         "id": "sess-old",
         "title": "旧对话",
         "agent_id": "agent-1",
@@ -843,7 +848,7 @@ def test_session_without_extra_columns_stays_in_chat_history(isolated_db):
         "updated_at": "2026-08-21T00:00:00+00:00",
     })
 
-    loaded = database.get_chat_session("sess-old")
+    loaded = get_chat_session("sess-old")
     assert loaded["id"] == "sess-old"
     assert find_chat_session("sess-old").id == "sess-old"
 
@@ -859,8 +864,8 @@ def test_chat_session_kind_defaults_to_chat(isolated_db):
         updated_at="2026-08-21T00:00:00+00:00",
     )
     assert session.kind == "chat"
-    database.insert_chat_session_if_absent(session.model_dump())
-    assert database.get_chat_session("sess-chat")["kind"] == "chat"
+    insert_chat_session_if_absent(session.model_dump())
+    assert get_chat_session("sess-chat")["kind"] == "chat"
 
 
 def test_chat_run_trigger_source_defaults_to_user(isolated_db):

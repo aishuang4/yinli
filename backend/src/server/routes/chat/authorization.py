@@ -3,8 +3,8 @@
 Leader、Team Member、Subagent 與 external action 都從這裡繼承模式和能力上限。
 沒有已落庫的 live Run 時不綁定，基礎設施 Agent 仍走原工廠。
 """
-
 from __future__ import annotations
+
 
 from pathlib import Path
 
@@ -17,7 +17,10 @@ from src.security.authorization.models import RunAuthorization, RunAuthorization
 from src.security.authorization.service import PlatformAuthorizationService
 from src.server.routes.chat.background_runs import current_chat_background_run_id
 from src.server.routes.chat.plan_mode.policy import is_plan_mode_tool_allowed
-from src.storage.database import get_chat_run, upsert_chat_run
+from src.storage.records.chat_run_records import (
+    get_chat_run,
+    upsert_chat_run,
+)
 from src.tenancy.context import current_tenant
 
 

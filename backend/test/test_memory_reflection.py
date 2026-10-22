@@ -1,16 +1,18 @@
 """运行后 Markdown 记忆反思测试。"""
-
 from __future__ import annotations
+
+from src.storage.records.memory_markdown_candidates import count_pending_memory_markdown_candidates
+
 
 import asyncio
 
 import pytest
 
-from src.memory.extraction_agents import (
+from src.memory.legacy.extraction_agents import (
     MemoryReflectionAgentPayload,
 )
-from src.memory.markdown_store import MarkdownMemoryStore
-from src.memory.reflection import (
+from src.memory.legacy.markdown_files import LegacyMarkdownStore
+from src.memory.legacy.reflection import (
     MemoryReflectionInput,
     reflect_completed_run_memory,
     reflect_completed_run_memory_with_agents,
@@ -18,10 +20,10 @@ from src.memory.reflection import (
 from src.memory.trace import memory_reflection_audit_payload
 
 
-from src.memory.extraction_agents import _build_memory_reflection_system_prompt, _build_memory_reflection_user_prompt
+from src.memory.legacy.extraction_agents import _build_memory_reflection_system_prompt, _build_memory_reflection_user_prompt
 from src.tools.memory_reflection import MemoryFileToolSet
 from src.server.routes.chat.models import ChatToolRun
-from src.storage import database
+from src.storage.engine import database
 from src.memory.settings import save_memory_admission_policy
 import pytest
 
@@ -35,7 +37,7 @@ def isolated_memory_db(tmp_path, monkeypatch):
 
 
 def test_reflection_writes_user_preference_memory(tmp_path):
-    store = MarkdownMemoryStore(root=tmp_path / "memory")
+    store = LegacyMarkdownStore(root=tmp_path / "memory")
 
     result = reflect_completed_run_memory(
         MemoryReflectionInput(
@@ -57,7 +59,7 @@ def test_reflection_writes_user_preference_memory(tmp_path):
 
 
 def test_reflection_writes_agent_negative_memory(tmp_path):
-    store = MarkdownMemoryStore(root=tmp_path / "memory")
+    store = LegacyMarkdownStore(root=tmp_path / "memory")
 
     result = reflect_completed_run_memory(
         MemoryReflectionInput(
@@ -77,7 +79,7 @@ def test_reflection_writes_agent_negative_memory(tmp_path):
 
 
 def test_reflection_writes_global_memory(tmp_path):
-    store = MarkdownMemoryStore(root=tmp_path / "memory")
+    store = LegacyMarkdownStore(root=tmp_path / "memory")
 
     result = reflect_completed_run_memory(
         MemoryReflectionInput(
@@ -106,7 +108,7 @@ def test_reflection_ignores_without_long_term_intent(tmp_path):
             user_message="帮我看一下这个函数。",
             assistant_text="可以。",
         ),
-        store=MarkdownMemoryStore(root=tmp_path / "memory"),
+        store=LegacyMarkdownStore(root=tmp_path / "memory"),
     )
 
     assert result.ignored_reason == "below_history_threshold"
@@ -122,7 +124,7 @@ def test_reflection_audit_payload_includes_admission_quality(tmp_path):
             user_message="以后默认用中文回答，解释保持简洁。",
             assistant_text="好的，我会记住这个偏好。",
         ),
-        store=MarkdownMemoryStore(root=tmp_path / "memory"),
+        store=LegacyMarkdownStore(root=tmp_path / "memory"),
     )
 
     payload = memory_reflection_audit_payload(result)
@@ -142,7 +144,7 @@ def test_reflection_ignores_sensitive_content(tmp_path):
             user_message="记住 token=secret-value-123456",
             assistant_text="不应该记。",
         ),
-        store=MarkdownMemoryStore(root=tmp_path / "memory"),
+        store=LegacyMarkdownStore(root=tmp_path / "memory"),
     )
 
     assert result.ignored_reason == "sensitive_content"
@@ -150,7 +152,7 @@ def test_reflection_ignores_sensitive_content(tmp_path):
 
 
 def test_reflection_deduplicates_existing_note(tmp_path):
-    store = MarkdownMemoryStore(root=tmp_path / "memory")
+    store = LegacyMarkdownStore(root=tmp_path / "memory")
     item = MemoryReflectionInput(
         session_id="session-1",
         agent_id="agent-1",
@@ -170,7 +172,7 @@ def test_reflection_deduplicates_existing_note(tmp_path):
 
 
 def test_reflection_near_duplicate_ignores_different_source(tmp_path):
-    store = MarkdownMemoryStore(root=tmp_path / "memory")
+    store = LegacyMarkdownStore(root=tmp_path / "memory")
     first = MemoryReflectionInput(
         session_id="session-1",
         agent_id="agent-1",
@@ -198,7 +200,7 @@ def test_reflection_near_duplicate_ignores_different_source(tmp_path):
 
 
 def test_reflection_merges_conflicting_language_preference(tmp_path):
-    store = MarkdownMemoryStore(root=tmp_path / "memory")
+    store = LegacyMarkdownStore(root=tmp_path / "memory")
     first = MemoryReflectionInput(
         session_id="session-1",
         agent_id="agent-1",
@@ -269,8 +271,8 @@ def test_reflection_with_agents_writes_model_memories(tmp_path, monkeypatch):
             ],
         )
 
-    monkeypatch.setattr("src.memory.reflection.run_memory_reflection_agent", fake_memory_agent)
-    store = MarkdownMemoryStore(root=tmp_path / "memory")
+    monkeypatch.setattr("src.memory.legacy.reflection.run_memory_reflection_agent", fake_memory_agent)
+    store = LegacyMarkdownStore(root=tmp_path / "memory")
     store.write_global_memory("# Summary\n\n已有规则：不要恢复旧记忆模块。")
 
     result = asyncio.run(
@@ -319,8 +321,8 @@ def test_reflection_with_agents_queues_user_and_global_candidates_when_confirmat
             ],
         )
 
-    monkeypatch.setattr("src.memory.reflection.run_memory_reflection_agent", fake_memory_agent)
-    store = MarkdownMemoryStore(root=tmp_path / "memory")
+    monkeypatch.setattr("src.memory.legacy.reflection.run_memory_reflection_agent", fake_memory_agent)
+    store = LegacyMarkdownStore(root=tmp_path / "memory")
 
     result = asyncio.run(
         reflect_completed_run_memory_with_agents(
@@ -344,10 +346,10 @@ def test_reflection_with_agents_queues_user_and_global_candidates_when_confirmat
     assert candidate["scope"] == "user" and candidate["status"] == "pending"
     assert candidate["sourceRunId"] == "run-1"
     assert not (tmp_path / "memory" / "users").exists()
-    assert database.count_pending_memory_markdown_candidates() == 1
+    assert count_pending_memory_markdown_candidates() == 1
 
     # 采纳后才真正写文件
-    from src.memory.reflection import apply_markdown_candidate
+    from src.memory.legacy.reflection import apply_markdown_candidate
 
     ok, path = asyncio.run(apply_markdown_candidate(candidate, store=store))
     assert ok and path.endswith("/users/user_memory.md")
@@ -358,7 +360,7 @@ def test_reflection_with_agents_queues_user_and_global_candidates_when_confirmat
 
 
 def test_build_tool_trajectory_redacts_and_keeps_head_and_tail():
-    from src.memory.reflection import build_tool_trajectory
+    from src.memory.legacy.reflection import build_tool_trajectory
 
     calls = [
         ChatToolRun(id=str(i), name=f"T{i}", args=f'{{"i":{i}}}', result="ok", status="completed") for i in range(20)
@@ -406,7 +408,7 @@ def test_reflection_with_agents_calls_reflection_once_and_skips_fallback_when_mo
         calls.append(kwargs)
         return MemoryReflectionAgentPayload(shouldWrite=False, reason="临时确认，不值得写。", memories=[])
 
-    monkeypatch.setattr("src.memory.reflection.run_memory_reflection_agent", fake_memory_agent)
+    monkeypatch.setattr("src.memory.legacy.reflection.run_memory_reflection_agent", fake_memory_agent)
 
     result = asyncio.run(
         reflect_completed_run_memory_with_agents(
@@ -418,7 +420,7 @@ def test_reflection_with_agents_calls_reflection_once_and_skips_fallback_when_mo
                 assistant_text="好的。",
             ),
             model_name="model",
-            store=MarkdownMemoryStore(root=tmp_path / "memory"),
+            store=LegacyMarkdownStore(root=tmp_path / "memory"),
         ),
     )
 
@@ -432,7 +434,7 @@ def test_reflection_with_agents_falls_back_to_rules(tmp_path, monkeypatch):
     async def failing_memory_agent(**kwargs):
         raise RuntimeError("model unavailable")
 
-    monkeypatch.setattr("src.memory.reflection.run_memory_reflection_agent", failing_memory_agent)
+    monkeypatch.setattr("src.memory.legacy.reflection.run_memory_reflection_agent", failing_memory_agent)
 
     result = asyncio.run(
         reflect_completed_run_memory_with_agents(
@@ -444,7 +446,7 @@ def test_reflection_with_agents_falls_back_to_rules(tmp_path, monkeypatch):
                 assistant_text="好的。",
             ),
             model_name="model",
-            store=MarkdownMemoryStore(root=tmp_path / "memory"),
+            store=LegacyMarkdownStore(root=tmp_path / "memory"),
         ),
     )
 

@@ -322,7 +322,7 @@ def bootstrap_tenant_scheduler(*, now: datetime | None = None) -> dict[str, int]
     seeded = ensure_scheduled_jobs_defaults()
     try:
         from src.catalog.sync_jobs import persist_job_definition, sync_job_definitions
-        from src.storage.database import list_scheduled_jobs
+        from src.storage.records.scheduled_job_records import list_scheduled_jobs
         from src.scheduler.service import ScheduledJobService
 
         service = ScheduledJobService()

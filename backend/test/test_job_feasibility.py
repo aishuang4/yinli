@@ -1,6 +1,6 @@
 """创建前能力门禁：发邮件矩阵与 ScheduleJob 硬闸门。"""
-
 from __future__ import annotations
+
 
 from types import SimpleNamespace
 
@@ -11,8 +11,13 @@ from src.scheduler.feasibility import evaluate_job_feasibility
 from src.scheduler.models import ScheduledJobValidationError
 from src.scheduler.service import ScheduledJobService
 from src.scheduler.settings import set_scheduled_jobs_settings
-from src.storage import database
-from src.storage.database import DEFAULT_PROJECT_ID, DEFAULT_WORKSPACE_ID, ensure_db, upsert_agent
+from src.storage.engine import database
+from src.storage.engine.database import (
+    DEFAULT_PROJECT_ID,
+    DEFAULT_WORKSPACE_ID,
+    ensure_db,
+)
+from src.catalog.loader import import_sqlite_agent_record
 
 
 @pytest.fixture()
@@ -198,7 +203,7 @@ def test_send_only_without_channel_is_impossible(monkeypatch):
 def test_schedule_job_gate_rejects_email_without_accept_partial(isolated_db, monkeypatch):
     ensure_db()
     set_scheduled_jobs_settings(enabled=True, capability_gate=True)
-    upsert_agent({
+    import_sqlite_agent_record({
         "id": "agent-1",
         "name": "agent-1",
         "system_prompt": "p",

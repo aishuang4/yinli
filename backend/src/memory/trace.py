@@ -3,10 +3,12 @@
 记忆审计统一写入独立 `MEMORY_AUDIT` trace event，payload.type 固定为 `memory`，
 避免和普通模型、工具、Skill 运行事件混在一起。
 """
-
 from __future__ import annotations
 
+
 from typing import Any
+
+from src.memory.legacy.injection import MemoryRecallResult
 
 MEMORY_AUDIT_EVENT_TYPE = "MEMORY_AUDIT"
 
@@ -49,6 +51,36 @@ def record_memory_audit_event(
         )
     except Exception:
         pass
+
+
+def record_memory_recall_audit(
+    *,
+    session_id: str,
+    persist: bool,
+    agent_id: str,
+    agent_name: str,
+    recall: MemoryRecallResult,
+    scope_label: str = "",
+) -> None:
+    """把自动召回写进 MEMORY_AUDIT：命中哪些 nodeId、候选多少、是否注入。"""
+
+    prefix = f"[{scope_label}] " if scope_label else ""
+    record_memory_audit_event(
+        session_id=session_id,
+        persist=persist,
+        agent_id=agent_id,
+        agent_name=agent_name,
+        action="memory_recall",
+        status="completed",
+        title=f"{prefix}Memory recalled for turn" if recall.node_ids else f"{prefix}Memory recall found nothing relevant",
+        content=f"injected={len(recall.node_ids)}, candidates={recall.candidate_count}",
+        payload={
+            "nodeIds": recall.node_ids,
+            "candidateCount": recall.candidate_count,
+            "queryChars": recall.query_chars,
+            "injectedChars": len(recall.text),
+        },
+    )
 
 
 def memory_reflection_audit_payload(result: Any) -> dict[str, Any]:

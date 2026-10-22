@@ -7,8 +7,8 @@ from pathlib import Path
 from src.group_studio.models import GROUP_STUDIO_HOST_AGENT_ID
 from src.group_studio.settings import is_group_studio_enabled
 from src.project_resources import ProjectResourceAccess
-from src.storage import database
-from src.storage.database import ensure_db
+from src.storage.engine import database
+from src.storage.engine.database import ensure_db
 import sqlite3
 import pytest
 
@@ -67,7 +67,7 @@ def test_group_studio_does_not_import_chat_hitl_or_leader_stream():
 
 
 def test_records_do_not_write_chat_tables():
-    text = (BACKEND_SRC / "storage" / "group_studio_records.py").read_text(encoding="utf-8")
+    text = (BACKEND_SRC / "storage" / "records" / "group_studio_records.py").read_text(encoding="utf-8")
     assert "INSERT INTO chat_sessions" not in text
     assert "INSERT INTO chat_messages" not in text
     assert "INSERT INTO run_events" not in text

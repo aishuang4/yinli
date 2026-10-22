@@ -22,7 +22,7 @@ def local_tenant(tmp_path, monkeypatch):
     from src.config import runtime_paths
     from src.tenancy.context import TenantContext, use_tenant
     from src.tenancy.registry import evict_all
-    from src.storage import database
+    from src.storage.engine import database
 
     evict_all()
     database.forget_all()

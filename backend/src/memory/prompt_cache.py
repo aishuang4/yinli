@@ -1,8 +1,6 @@
-"""按会话冻结的记忆注入文本。
+"""按会话冻结的习惯全文和专业区全文。
 
-习惯全文按用户冻结，写入后立刻失效，让这一轮回复能读到新习惯。
-专业全文按智能体和会话冻结，判断智能体改写后下一轮才换。
-旧的整段记忆摘要缓存仍留在这里，避免 Memory 页面改写后继续命中过期文本。
+旧的整段记忆摘要缓存在 `legacy.prompt_cache`。
 """
 
 from __future__ import annotations
@@ -14,31 +12,10 @@ from collections.abc import Callable
 from src.agents.session_context import session_context_key
 
 _lock = threading.Lock()
-_cache: dict[str, tuple[str, float]] = {}
 _habit_cache: dict[str, tuple[str, float]] = {}
 _professional_cache: dict[str, tuple[str, float]] = {}
 # 与 factory.AGENT_CACHE_IDLE_SECONDS 保持一致（6h）；不直接 import 以免拖入工厂。
 MEMORY_PROMPT_TTL_SECONDS = 6 * 60 * 60
-
-
-def session_memory_prompt(
-    *,
-    agent_id: str,
-    session_id: str | None,
-    project_slug: str = "",
-    build: Callable[[], str],
-) -> str:
-    """返回该会话冻结的旧记忆注入文本；首次（或失效后）调用 `build()` 生成。
-
-    有项目维度时，缓存键带上 project_slug，避免换项目后命中旧文本。
-    """
-
-    if not session_id or not agent_id:
-        return build()
-    key = session_context_key(agent_id, session_id)
-    if project_slug:
-        key = f"{key}:project:{project_slug}"
-    return _cached(_cache, key, build)
 
 
 def session_habit_prompt(*, user_id: str, build: Callable[[], str]) -> str:
@@ -83,8 +60,10 @@ def invalidate_professional_prompts(*, agent_id: str | None = None) -> int:
 def invalidate_memory_prompts(*, agent_id: str | None = None) -> int:
     """让冻结文本失效。不传 agent_id 时习惯、专业和旧摘要一起清掉。"""
 
+    from src.memory.legacy.prompt_cache import legacy_prompt_cache
+
     with _lock:
-        count = _drop(_cache, agent_id)
+        count = _drop(legacy_prompt_cache, agent_id)
         count += _drop(_professional_cache, agent_id)
         if agent_id is None:
             count += _drop(_habit_cache, None)
